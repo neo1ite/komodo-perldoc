@@ -5,7 +5,7 @@
         <em:unpack>true</em:unpack>
         <em:id>komodo-perldoc@neolite.ru</em:id>
         <em:name>Komodo Perldoc</em:name>
-        <em:version>0.1</em:version>
+        <em:version>0.1.1</em:version>
         <em:description>Local perldoc fallback for Komodo IDE Documentation.</em:description>
         <em:creator>neo1ite</em:creator>
         <em:homepageURL>https://github.com/neo1ite/komodo-perldoc</em:homepageURL>
