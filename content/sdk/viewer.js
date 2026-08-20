@@ -10,25 +10,28 @@
 
     var lastSerial = 0;
 
-    function currentViewWindow() {
+    function currentBrowser() {
         var preview = $("#doc-preview", _window);
         if (!preview.length) return null;
-        return preview.element().contentWindow;
+        return preview.element();
     }
 
-    function ensurePerldocSection(viewWindow, title, body, isError, attempt) {
-        attempt = attempt || 0;
-        if (!viewWindow || currentViewWindow() !== viewWindow) return;
+    function decodeInfo(first, second) {
+        var raw = null;
 
-        var wrapper = viewWindow.document.getElementById("wrapper");
-        if (!wrapper) {
-            if (attempt < 10) {
-                timers.setTimeout(function() {
-                    ensurePerldocSection(viewWindow, title, body, isError, attempt + 1);
-                }, 25);
-            }
-            return;
+        if (typeof second == "string" && second) {
+            raw = second;
+        } else if (typeof first == "string" && first) {
+            raw = first;
         }
+
+        if (!raw) return null;
+        return JSON.parse(raw);
+    }
+
+    function renderSection(viewWindow, title, body) {
+        var wrapper = viewWindow.document.getElementById("wrapper");
+        if (!wrapper) return false;
 
         var section = viewWindow.document.getElementById("komodo-perldoc");
         if (!section) {
@@ -47,53 +50,82 @@
         pre.id = "komodo-perldoc-output";
         pre.style.whiteSpace = "pre-wrap";
         pre.style.wordWrap = "break-word";
-        pre.textContent = body || (isError ? "Local perldoc lookup failed." : "Loading local documentation…");
+        pre.textContent = body || "";
         section.appendChild(pre);
+        return true;
     }
 
-    this.augment = function(index, serial) {
-        lastSerial = serial;
+    function waitForStockRender(data, serial, browser, callback, attempt) {
+        attempt = attempt || 0;
+        if (serial != lastSerial) return;
 
-        var viewWindow = currentViewWindow();
-        if (!viewWindow) {
-            log.warn("Documentation preview window is not available");
+        var current = currentBrowser();
+        if (!browser) browser = current;
+
+        // A newer Documentation preview replaced the one that belongs to this
+        // lookup.  Never write stale perldoc into the new page.
+        if (!browser || current !== browser) return;
+
+        var viewWindow = browser.contentWindow;
+        var wrapper = viewWindow && viewWindow.document && viewWindow.document.getElementById("wrapper");
+        var text = wrapper ? (wrapper.textContent || "") : "";
+
+        // The browser document can be loaded before scope-docs has rendered its
+        // template.  Wait until the selected symbol is actually present.
+        if (!wrapper || !wrapper.firstChild || (data.name && text.indexOf(data.name) == -1)) {
+            if (attempt >= 80) {
+                log.warn("Komodo Perldoc: stock preview did not become ready for " + data.name);
+                return;
+            }
+
+            timers.setTimeout(function() {
+                waitForStockRender(data, serial, browser, callback, attempt + 1);
+            }, 25);
             return;
         }
 
-        scope.info(index, function(status, results) {
-            if (serial != lastSerial || currentViewWindow() !== viewWindow) return;
-            if (!results) {
-                log.warn("scope-docs returned no entry data for index " + index);
-                return;
-            }
+        callback(viewWindow);
+    }
+
+    this.schedule = function(index, serial, browser) {
+        lastSerial = serial;
+
+        scope.info(index, function(first, second) {
+            if (serial != lastSerial) return;
 
             var data;
             try {
-                data = JSON.parse(results);
+                data = decodeInfo(first, second);
             } catch (e) {
-                log.exception(e, "Could not decode scope-docs entry data");
+                log.exception(e, "Komodo Perldoc: could not decode scope-docs entry data");
                 return;
             }
 
-            if (!data || data.doc_name != "Perl") return;
-            if (data.doc && String(data.doc).trim()) {
-                log.debug("CIX documentation already exists for " + data.name + "; leaving stock preview untouched");
+            if (!data) {
+                log.warn("Komodo Perldoc: scope-docs returned no entry data for index " + index);
                 return;
             }
+            if (data.doc_name != "Perl") return;
+            if (data.doc && String(data.doc).trim()) return;
 
-            log.debug("CIX documentation is empty for " + data.name + "; requesting local perldoc");
-            ensurePerldocSection(viewWindow, data.name, "Loading local documentation…", false);
+            log.warn("Komodo Perldoc: empty CIX doc for " + data.name + "; starting local lookup");
 
-            perldoc.lookup(data, function(result) {
-                if (serial != lastSerial || currentViewWindow() !== viewWindow) return;
+            waitForStockRender(data, serial, browser, function(viewWindow) {
+                if (serial != lastSerial) return;
 
-                if (result.ok) {
-                    ensurePerldocSection(viewWindow, result.title || data.name, result.output, false);
-                    return;
-                }
+                renderSection(viewWindow, data.name, "Loading local documentation…");
 
-                var message = result.error || result.output || "Local Pod::Perldoc returned no documentation.";
-                ensurePerldocSection(viewWindow, result.title || data.name, message, true);
+                perldoc.lookup(data, function(result) {
+                    if (serial != lastSerial || currentBrowser() !== browser) return;
+
+                    if (result.ok) {
+                        renderSection(viewWindow, result.title || data.name, result.output);
+                        return;
+                    }
+
+                    var message = result.error || result.output || "Local Pod::Perldoc returned no documentation.";
+                    renderSection(viewWindow, result.title || data.name, message);
+                });
             });
         });
     };
