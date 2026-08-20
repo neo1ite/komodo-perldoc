@@ -5,13 +5,15 @@
         <em:unpack>true</em:unpack>
         <em:id>komodo-perldoc@neolite.ru</em:id>
         <em:name>Komodo Perldoc</em:name>
-        <em:version>0.1.6</em:version>
+        <em:version>0.1.7</em:version>
         <em:description>Local perldoc fallback for Komodo IDE Documentation.</em:description>
         <em:creator>neo1ite</em:creator>
         <em:homepageURL>https://github.com/neo1ite/komodo-perldoc</em:homepageURL>
         <em:type>2</em:type>
-        <em:bootstrap>true</em:bootstrap>
 
+        <!-- Deliberately not restartless.  Komodo/Gecko must apply installs
+             and upgrades on application restart so the classic XUL overlay
+             lifecycle is deterministic. -->
         <em:targetApplication>
             <Description>
                 <em:id>{36E66FA0-F259-11D9-850E-000D935D3368}</em:id>
