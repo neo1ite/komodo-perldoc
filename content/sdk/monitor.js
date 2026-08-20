@@ -49,10 +49,14 @@
         var match = /^co-result-item-doc-(\d+)$/.exec(id);
         if (!match) return null;
 
+        var text = elem.textContent ? String(elem.textContent).replace(/\s+/g, " ").trim() : "";
+        var nameMatch = /^\d+\s+([^\s]+)/.exec(text);
+
         return {
             index: match[1],
             id: id,
-            text: elem.textContent ? String(elem.textContent).replace(/\s+/g, " ").trim() : ""
+            name: nameMatch ? nameMatch[1] : null,
+            text: text
         };
     }
 
@@ -86,6 +90,21 @@
         if (!selected || !browser || !pageReady(browser)) return;
 
         var heading = pageHeading(browser);
+
+        // When the user follows a breadcrumb/link in the maximized viewer,
+        // Commando keeps the original search result selected.  Only attach
+        // perldoc when the stock page still represents that selected symbol.
+        if (selected.name && heading && selected.name != heading) {
+            debug.trace("monitor", "not augmenting: rendered heading differs from selected symbol", {
+                reason: reason,
+                index: selected.index,
+                selectedName: selected.name,
+                heading: heading,
+                browserSrc: browser.getAttribute("src")
+            });
+            return;
+        }
+
         var key = [selected.index, browserId(browser), heading].join("|");
         if (key == lastKey) return;
         lastKey = key;
@@ -96,6 +115,7 @@
             serial: serial,
             index: selected.index,
             selectedId: selected.id,
+            selectedName: selected.name,
             selectedText: selected.text,
             browserId: browserId(browser),
             browserSrc: browser.getAttribute("src"),
