@@ -11,7 +11,7 @@
 ### Версия 0.1.2
 
 - Использует существующий scope `Documentation`, отдельного интерфейса поиска нет.
-- Не заменяет штатный viewer и больше не перехватывает `onPreviewReady`: breadcrumbs, сигнатуры, навигация, **Online Documentation** и **Insert Snippet** остаются кодом Komodo.
+- Не заменяет штатный viewer и не перехватывает `onPreviewReady`: breadcrumbs, сигнатуры, навигация, **Online Documentation** и **Insert Snippet** остаются кодом Komodo.
 - Перехватывает только вызов `docs.preview()` для запоминания выбранного CIX entry, затем ждёт, пока штатный viewer полностью отрисует соответствующий `#doc-preview`.
 - Для пустого Perl `doc` вызывает локальный `Pod::Perldoc` и добавляет секцию `Perldoc — ...` в уже готовый штатный preview.
 - Использует `perlDefaultInterpreter` из настроек Komodo; если он не задан, используется `perl` из `PATH`.
@@ -23,15 +23,42 @@
 
 ### Диагностика 0.1.2
 
-В этой тестовой версии ключевые точки намеренно пишутся на уровне WARNING, чтобы они были видны в `pystderr.log` без изменения log level:
+0.1.2 — диагностическая сборка. Она больше не полагается только на `ko/logging`: отладка одновременно отправляется в Mozilla Console Service и в отдельный файл:
 
 ```text
-Komodo Perldoc 0.1.2 loaded
-Komodo Perldoc 0.1.2 bootstrap loaded into Komodo window
-Komodo Perldoc: empty CIX doc for ...; starting local lookup
+~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
 ```
 
-Если ни одной из первых двух строк после запуска нет, проблема находится на уровне загрузки add-on. Если первые две есть, но третьей нет после выбора `_check_unique`, проблема находится в hook/получении CIX entry. Если третья есть, но секция не появилась, проблема уже локализована в ожидании viewer или запуске `Pod::Perldoc`.
+Файл **обнуляется при каждом `startup()` расширения**, поэтому в нём остаётся трассировка только текущего запуска/установки. Это позволяет увидеть даже ошибки, произошедшие до загрузки `ko/logging` и CommonJS-модулей.
+
+В трассировке последовательно фиксируются:
+
+1. вызов bootstrap `startup()`, причина запуска и путь установки add-on;
+2. обнаружение окна Komodo и событие `komodo-post-startup`;
+3. наличие `window.require`, регистрация CommonJS require-path и загрузка `komodo-perldoc/main`;
+4. установка hook на `scope-docs/docs.preview()`;
+5. каждый перехваченный `docs.preview(index, type)` и текущий Documentation subscope;
+6. вызов `koScopeDocs.info()`, тип/длина callback-аргументов и разобранный CIX entry;
+7. `doc_name`, имя, тип, сигнатура, длина `doc` и цепочка `parents`;
+8. ожидание штатного `#doc-preview` с контрольными попытками 0/5/10/20/40/80;
+9. выбранный Perl interpreter и сформированная цепочка `perldoc` lookup-кандидатов;
+10. точная команда `Pod::Perldoc`, возврат process handle, return code и размеры stdout/stderr;
+11. первые 500 символов stdout/stderr, cache hit/miss, fallback на модуль и финальный результат;
+12. создание и заполнение DOM-секции `#komodo-perldoc`.
+
+После теста достаточно прислать этот файл целиком:
+
+```sh
+cat ~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
+```
+
+Для наблюдения в реальном времени:
+
+```sh
+tail -f ~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
+```
+
+Если файла **вообще нет**, bootstrap расширения не был запущен. Если есть только `startup()`/window-сообщения — проблема на стадии загрузки CommonJS. Если есть `preview hook installed`, но нет `docs.preview() intercepted` — hook установлен, но Documentation идёт другим путём. Дальше трассировка показывает точную границу отказа без догадок.
 
 ### Почему Komodo не просит перезапуск
 
@@ -59,11 +86,12 @@ dist/komodo-perldoc-0.1.2.xpi
 
 1. Установить `komodo-perldoc-0.1.2.xpi` через **Install Add-on From File**.
 2. Для чистого теста полностью перезапустить Komodo.
-3. Проверить в логе две строки загрузки `Komodo Perldoc 0.1.2 ... loaded`.
+3. Проверить наличие `~/.komodoide/9.3/XRE/komodo-perldoc-debug.log`.
 4. Открыть Perl-файл → `Documentation` → выбрать `_check_unique` из `AutoSplit`.
 5. Штатная сигнатура должна остаться на месте, а ниже должен появиться раздел `Perldoc — AutoSplit` с локальным POD.
 6. Для записи с уже заполненным CIX `doc` расширение ничего не добавляет.
 7. **Online Documentation** и **Insert Snippet** должны работать штатно.
+8. Если результат неверный — приложить `komodo-perldoc-debug.log` целиком.
 
 ---
 
@@ -76,7 +104,7 @@ Komodo 9.3.x builds its local Perl Documentation scope from CodeIntel CIX files.
 ### Version 0.1.2
 
 - Hooks the existing `Documentation` scope; there is no separate search UI.
-- Does not replace the stock viewer and no longer wraps `onPreviewReady`; breadcrumbs, signatures, navigation, **Online Documentation**, and **Insert Snippet** remain stock Komodo behavior.
+- Does not replace the stock viewer or wrap `onPreviewReady`; breadcrumbs, signatures, navigation, **Online Documentation**, and **Insert Snippet** remain stock Komodo behavior.
 - Wraps only `docs.preview()` to remember the selected CIX entry, then waits until Komodo has rendered the matching `#doc-preview`.
 - For an empty Perl `doc`, invokes local `Pod::Perldoc` and appends a `Perldoc — ...` section to the already-rendered stock page.
 - Uses Komodo's `perlDefaultInterpreter` preference when set, otherwise `perl` from `PATH`.
@@ -88,15 +116,29 @@ Komodo 9.3.x builds its local Perl Documentation scope from CodeIntel CIX files.
 
 ### 0.1.2 diagnostics
 
-This test build deliberately logs its key checkpoints at WARNING level so they are visible in `pystderr.log` without changing logger configuration:
+0.1.2 is a diagnostic build. It no longer relies on `ko/logging` alone: traces are sent both to Mozilla Console Service and to a dedicated file:
 
 ```text
-Komodo Perldoc 0.1.2 loaded
-Komodo Perldoc 0.1.2 bootstrap loaded into Komodo window
-Komodo Perldoc: empty CIX doc for ...; starting local lookup
+~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
 ```
 
-If neither of the first two messages is present after startup, the problem is add-on loading. If they are present but the third message does not appear after selecting `_check_unique`, the problem is the preview hook/CIX entry path. If the third message appears but the Perldoc section does not, the failure is narrowed to stock-preview readiness or the local `Pod::Perldoc` runner.
+The file is **truncated on every add-on `startup()`**, so it represents the current install/startup only. This captures failures that happen before `ko/logging` or the extension's CommonJS modules are available.
+
+The trace records bootstrap startup and window discovery, `window.require`, require-path registration, hook installation, every intercepted `docs.preview()`, `koScopeDocs.info()` callback shapes, decoded CIX metadata, stock viewer readiness, selected Perl interpreter, lookup candidates, the exact `Pod::Perldoc` command, process return code, stdout/stderr sizes and samples, cache/fallback decisions, and final DOM insertion.
+
+After testing, send the complete trace:
+
+```sh
+cat ~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
+```
+
+Or watch it live:
+
+```sh
+tail -f ~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
+```
+
+If the file does not exist at all, the bootstrap was never started. If it contains only bootstrap/window messages, loading failed before the CommonJS hook. If it reaches `preview hook installed` but never records `docs.preview() intercepted`, the Documentation browser is taking a different path. Subsequent checkpoints identify the exact failing boundary without guesswork.
 
 ### Why Komodo does not request a restart
 
@@ -124,8 +166,9 @@ dist/komodo-perldoc-0.1.2.xpi
 
 1. Install `komodo-perldoc-0.1.2.xpi` with **Install Add-on From File**.
 2. Fully restart Komodo for a clean test.
-3. Confirm that the two `Komodo Perldoc 0.1.2 ... loaded` messages are present in the log.
+3. Confirm that `~/.komodoide/9.3/XRE/komodo-perldoc-debug.log` exists.
 4. Open a Perl file → `Documentation` → select `_check_unique` from `AutoSplit`.
 5. The stock signature should remain visible and a `Perldoc — AutoSplit` section should appear below it.
 6. Entries that already contain CIX `doc` remain untouched.
 7. **Online Documentation** and **Insert Snippet** must continue to behave normally.
+8. If the result is wrong, attach the complete `komodo-perldoc-debug.log`.
