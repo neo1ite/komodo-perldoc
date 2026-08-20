@@ -6,31 +6,46 @@
 
 **Komodo Perldoc** — локальный fallback к `perldoc` для встроенного браузера документации Komodo IDE 9.3.x.
 
-Komodo 9.3.x строит локальный scope `Documentation` по CodeIntel CIX. У многих Perl-символов в CIX есть сигнатура, но нет `doc`, поэтому штатный preview показывает только имя и сигнатуру. Расширение сохраняет штатный поиск CodeIntel и не модифицирует `scope-docs.jar`.
+Komodo строит локальную Perl-документацию из CodeIntel CIX. У части символов есть сигнатура, но нет `doc`, поэтому штатный preview показывает только имя и сигнатуру. Расширение не меняет `scope-docs.jar` и не заменяет штатный поиск.
 
 ### Версия 0.1.4
 
-Диагностика 0.1.3 локализовала проблему окончательно: add-on загружается, но обычная навигация Commando **не вызывает экспортированный `scope-docs/docs.preview()`**, хотя именно штатный Commando создаёт `#doc-preview` и рендерит нужный CIX entry.
+Диагностика 0.1.3 выявила две отдельные проблемы:
 
-Поэтому 0.1.4 больше вообще не перехватывает функции `scope-docs`. Вместо этого она наблюдает фактическое состояние Commando:
+1. обычная навигация Commando не вызывает экспортированный `scope-docs/docs.preview()`, поэтому предыдущий hook стоял не на том пути;
+2. порядок запуска bootstrap add-on'ов недетерминирован: `komodo-perldoc` иногда загружался до того, как встроенный `scope-docs` зарегистрировал XPCOM-компонент `@activestate.com/commando/koScopeDocs;1`, что приводило к `Cc[...] is undefined`.
 
-- текущий scope должен быть `Documentation`, subscope — `Perl`;
-- выбранный результат берётся из DOM `#commando-results`;
-- entry id извлекается из штатного id вида `co-result-item-doc-281578`;
-- расширение ждёт полностью отрисованный штатный `#doc-preview`;
-- заголовок страницы сверяется с выбранным символом, чтобы не подмешивать документацию при переходе по breadcrumbs;
-- затем вызывается штатный `koScopeDocs.info(entry_id)`;
-- если `doc` пустой, запускается локальный `Pod::Perldoc` и в готовый штатный viewer добавляется секция `Perldoc — ...`.
+0.1.4 исправляет обе проблемы:
 
-Для `_check_unique` ожидаемая цепочка: `perldoc -f _check_unique` → miss → fallback на `AutoSplit` → POD модуля.
+- больше не monkey-patch'ит функции `scope-docs`;
+- наблюдает фактическое состояние Commando и штатный `#doc-preview`;
+- получает CIX entry id из выбранного результата вида `co-result-item-doc-281578`;
+- ждёт, пока заголовок штатного viewer совпадёт с выбранным символом;
+- вызывает `koScopeDocs.info(entry_id)`;
+- если `doc` пустой, запускает локальный `Pod::Perldoc`;
+- для функции сначала пробует `perldoc -f SYMBOL`, затем POD содержащего модуля;
+- перед загрузкой CommonJS-модулей ждёт регистрации `koScopeDocs` до 15 секунд, поэтому больше не зависит от порядка запуска add-on'ов;
+- `koScopeDocs` запрашивается лениво и не может уронить модуль при загрузке.
 
-Подробная трассировка сохраняется в:
+Для `_check_unique` ожидаемая цепочка:
+
+```text
+CIX: doc = NULL
+  -> perldoc -f _check_unique
+  -> miss
+  -> perldoc AutoSplit
+  -> секция "Perldoc — AutoSplit"
+```
+
+### Диагностика
+
+Подробный лог:
 
 ```text
 ~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
 ```
 
-В 0.1.4 остаётся и диагностический probe 0.1.3, поэтому лог содержит как production-маршрут `[monitor]`, так и независимые снимки `[probe]`.
+В нём фиксируются startup/retry, выбранный Commando entry, состояние `#doc-preview`, результат `koScopeDocs.info()`, выбранный Perl, точная команда `Pod::Perldoc`, return code и stdout/stderr.
 
 ### Сборка
 
@@ -46,50 +61,47 @@ dist/komodo-perldoc-0.1.4.xpi
 
 ### Smoke test
 
-1. Установить `komodo-perldoc-0.1.4.xpi` через **Install Add-on From File**.
-2. Полностью перезапустить Komodo.
-3. Открыть Perl-файл → `Documentation`.
-4. Выбрать `_check_unique` из `AutoSplit`.
-5. Штатная сигнатура должна остаться на месте; ниже должен появиться `Perldoc — AutoSplit`.
-6. Если нет — прислать целиком `~/.komodoide/9.3/XRE/komodo-perldoc-debug.log`.
-
-### Почему Komodo не просит перезапуск
-
-Расширение bootstrap/restartless (`<em:bootstrap>true</em:bootstrap>`), как и встроенный `scope-docs`. Между тестовыми версиями полный restart всё равно рекомендуется для очистки загруженных CommonJS-модулей.
+1. `git pull` и `./build.sh`.
+2. Установить `dist/komodo-perldoc-0.1.4.xpi`.
+3. Полностью перезапустить Komodo.
+4. Открыть Perl-файл → `Documentation` → выбрать `_check_unique`.
+5. Штатная сигнатура должна остаться; ниже должна появиться секция `Perldoc — AutoSplit`.
+6. Если нет — приложить полный `komodo-perldoc-debug.log`.
 
 ---
 
 ## English
 
-**Komodo Perldoc** provides a local `perldoc` fallback for Komodo IDE 9.3.x's built-in Documentation browser.
+**Komodo Perldoc** adds a local `perldoc` fallback to Komodo IDE 9.3.x's built-in Documentation browser.
 
-Komodo builds its Perl Documentation scope from CodeIntel CIX. Many entries have a signature but no `doc`, leaving the stock preview almost empty. The extension keeps the stock CodeIntel search and does not modify `scope-docs.jar`.
+Komodo builds local Perl documentation from CodeIntel CIX. Some entries have a signature but no `doc`, so the stock preview contains only the symbol name and signature. The extension keeps the stock search and does not modify `scope-docs.jar`.
 
 ### Version 0.1.4
 
-0.1.3 diagnostics established the real integration path: normal Commando navigation does **not** call the exported `scope-docs/docs.preview()` function, even though Commando creates `#doc-preview` and renders the selected CIX entry.
+0.1.3 diagnostics identified two independent problems:
 
-0.1.4 therefore stops wrapping `scope-docs` functions entirely. It observes the actual Commando state instead:
+1. normal Commando navigation bypasses the exported `scope-docs/docs.preview()` function, so the previous hook point was wrong;
+2. bootstrap add-on startup order is nondeterministic, and `komodo-perldoc` could load before the built-in `scope-docs` registered `@activestate.com/commando/koScopeDocs;1`, causing `Cc[...] is undefined`.
 
-- scope must be `Documentation` and subscope `Perl`;
-- the selected result is read from `#commando-results`;
-- the CIX entry id is extracted from stock ids such as `co-result-item-doc-281578`;
-- the extension waits for the stock `#doc-preview` to finish rendering;
-- the rendered heading must match the selected symbol, avoiding stale breadcrumb navigation;
-- stock `koScopeDocs.info(entry_id)` supplies the CIX metadata;
-- if `doc` is empty, local `Pod::Perldoc` is invoked and a `Perldoc — ...` section is appended to the already-rendered stock viewer.
+0.1.4 fixes both:
 
-For `_check_unique`, the intended chain is `perldoc -f _check_unique` → miss → module fallback → `AutoSplit` POD.
+- no longer monkey-patches `scope-docs` functions;
+- observes the real Commando selection and stock `#doc-preview`;
+- extracts the CIX entry id from stock result ids such as `co-result-item-doc-281578`;
+- waits until the rendered heading matches the selected symbol;
+- calls `koScopeDocs.info(entry_id)`;
+- if CIX `doc` is empty, invokes local `Pod::Perldoc`;
+- tries `perldoc -f SYMBOL` first, then falls back to the containing module POD;
+- waits up to 15 seconds for the `koScopeDocs` component before loading the extension modules;
+- resolves the `koScopeDocs` service lazily, avoiding module-load crashes.
 
-Detailed diagnostics are written to:
+Diagnostics are written to:
 
 ```text
 ~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
 ```
 
-The 0.1.3 probe remains enabled in this test build, so the trace contains both the production `[monitor]` path and independent `[probe]` snapshots.
-
-### Build
+Build with:
 
 ```sh
 ./build.sh
@@ -100,12 +112,3 @@ Output:
 ```text
 dist/komodo-perldoc-0.1.4.xpi
 ```
-
-### Smoke test
-
-1. Install `komodo-perldoc-0.1.4.xpi` with **Install Add-on From File**.
-2. Fully restart Komodo.
-3. Open a Perl file → `Documentation`.
-4. Select `_check_unique` from `AutoSplit`.
-5. The stock signature should remain visible and `Perldoc — AutoSplit` should appear below it.
-6. If not, attach the complete `~/.komodoide/9.3/XRE/komodo-perldoc-debug.log`.
