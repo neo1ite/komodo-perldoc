@@ -1,7 +1,7 @@
 (function() {
     const {Cc, Ci} = require("chrome");
 
-    const PREFIX = "[komodo-perldoc 0.1.6]";
+    const PREFIX = "[komodo-perldoc 0.1.7]";
     const consoleSvc = Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsIConsoleService);
     const dirSvc = Cc["@mozilla.org/file/directory_service;1"].getService(Ci.nsIProperties);
 
@@ -19,20 +19,14 @@
         try {
             return JSON.stringify(value);
         } catch (e) {
-            try {
-                return String(value);
-            } catch (ignored) {
-                return "<unprintable>";
-            }
+            try { return String(value); }
+            catch (ignored) { return "<unprintable>"; }
         }
     }
 
     function timestamp() {
-        try {
-            return new Date().toISOString();
-        } catch (e) {
-            return String(new Date());
-        }
+        try { return new Date().toISOString(); }
+        catch (e) { return String(new Date()); }
     }
 
     function append(line) {
@@ -46,16 +40,14 @@
             converter.writeString(line + "\n");
             converter.close();
         } catch (e) {
-            try {
-                consoleSvc.logStringMessage(PREFIX + " [debug] failed to write trace file: " + e);
-            } catch (ignored) {}
+            try { consoleSvc.logStringMessage(PREFIX + " [debug] failed to write trace file: " + e); }
+            catch (ignored) {}
         }
     }
 
     this.trace = function(component, message, details) {
         var line = timestamp() + " " + PREFIX + " [" + component + "] " + message;
         if (details !== undefined) line += " | " + safeString(details);
-
         try { consoleSvc.logStringMessage(line); } catch (e) {}
         append(line);
     };
@@ -71,6 +63,7 @@
     };
 
     this.path = function() {
-        try { return debugFile().path; } catch (e) { return "<unavailable>"; }
+        try { return debugFile().path; }
+        catch (e) { return "<unavailable>"; }
     };
 }).apply(module.exports);
