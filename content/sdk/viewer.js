@@ -55,6 +55,11 @@
         return true;
     }
 
+    function stillShowing(viewWindow) {
+        var browser = currentBrowser();
+        return !!(browser && browser.contentWindow === viewWindow);
+    }
+
     function waitForStockRender(data, serial, browser, callback, attempt) {
         attempt = attempt || 0;
         if (serial != lastSerial) return;
@@ -116,7 +121,7 @@
                 renderSection(viewWindow, data.name, "Loading local documentation…");
 
                 perldoc.lookup(data, function(result) {
-                    if (serial != lastSerial || currentBrowser() !== browser) return;
+                    if (serial != lastSerial || !stillShowing(viewWindow)) return;
 
                     if (result.ok) {
                         renderSection(viewWindow, result.title || data.name, result.output);
