@@ -99,6 +99,16 @@
         return true;
     }
 
+    function removeSection(viewWindow, reason) {
+        try {
+            var section = viewWindow.document.getElementById("komodo-perldoc");
+            if (section && section.parentNode) section.parentNode.removeChild(section);
+            debug.trace("viewer", "Perldoc section removed", {reason: reason || "unspecified"});
+        } catch (e) {
+            debug.exception("viewer", "failed to remove Perldoc section", e);
+        }
+    }
+
     function stillShowing(viewWindow) {
         var browser = currentBrowser();
         return !!(browser && browser.contentWindow === viewWindow);
@@ -219,6 +229,15 @@
                             renderSection(viewWindow, result.title || data.name, result.output);
                             return;
                         }
+
+                        // A normal local miss is not an error worth showing in
+                        // the Documentation UI.  Leave the stock CIX page alone
+                        // rather than rendering raw Pod::Perldoc diagnostics.
+                        if (result.miss) {
+                            removeSection(viewWindow, "local perldoc miss");
+                            return;
+                        }
+
                         var message = result.error || result.output || "Local Pod::Perldoc returned no documentation.";
                         renderSection(viewWindow, result.title || data.name, message);
                     });
