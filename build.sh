@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DIST="$ROOT/dist"
-OUT="$DIST/komodo-perldoc-0.1.6.xpi"
+OUT="$DIST/komodo-perldoc-0.1.7.xpi"
 
 command -v zip >/dev/null 2>&1 || {
     echo "build.sh: zip is required" >&2
@@ -17,7 +17,6 @@ cd "$ROOT"
 zip -q -9 -r "$OUT" \
     install.rdf \
     chrome.manifest \
-    bootstrap.js \
     content
 
 echo "$OUT"
