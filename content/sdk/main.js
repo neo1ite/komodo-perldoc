@@ -1,65 +1,46 @@
 (function() {
     const log       = require("ko/logging").getLogger("komodo-perldoc");
-    const commando  = require("commando/commando");
     const docs      = require("scope-docs/docs");
     const augmenter = require("./viewer");
-    const timers    = require("sdk/timers");
+    const $         = require("ko/dom");
+    const _window   = require("ko/windows").getMain();
 
     var loaded = false;
     var originalPreview = null;
-    var originalOnPreviewReady = null;
-    var pending = null;
     var serial = 0;
 
-    function isPerlScope() {
-        var subscope = commando.getSubscope();
-        return !!(subscope && subscope.name == "Perl");
+    function currentBrowser() {
+        var preview = $("#doc-preview", _window);
+        if (!preview.length) return null;
+        return preview.element();
     }
 
     this.load = function() {
         if (loaded) return;
 
         originalPreview = docs.preview;
-        originalOnPreviewReady = docs.onPreviewReady;
-
-        if (typeof originalPreview != "function" || typeof originalOnPreviewReady != "function") {
+        if (typeof originalPreview != "function") {
             throw new Error("scope-docs preview API is not available");
         }
 
-        // Keep the stock viewer completely intact.  We only remember which
-        // Perl entry is being opened, then augment the already-rendered page.
+        // Let Komodo create and render its own Documentation browser exactly as
+        // before.  We only remember the selected entry and augment that browser
+        // after the stock renderer has populated it.
         docs.preview = function(index, type) {
             serial++;
-            pending = isPerlScope() ? {
-                index: index,
-                type: type || "preview",
-                serial: serial
-            } : null;
+            var requestSerial = serial;
+            var result = originalPreview.apply(docs, arguments);
 
-            return originalPreview.apply(docs, arguments);
-        };
-        docs.preview.__komodoPerldoc = true;
-
-        docs.onPreviewReady = function() {
-            var request = pending;
-            var result = originalOnPreviewReady.apply(docs, arguments);
-
-            if (request) {
-                // Stock onPreviewReady schedules its scope.info() callback first.
-                // Run our augmentation one event-loop turn later so we never race
-                // or overwrite the stock Documentation renderer.
-                timers.setTimeout(function() {
-                    if (!pending || pending.serial != request.serial) return;
-                    augmenter.augment(request.index, request.serial);
-                }, 0);
+            if (index !== undefined && index !== null && index !== "") {
+                augmenter.schedule(index, requestSerial, currentBrowser());
             }
 
             return result;
         };
-        docs.onPreviewReady.__komodoPerldoc = true;
+        docs.preview.__komodoPerldoc = true;
 
         loaded = true;
-        log.info("Komodo Perldoc 0.1.1 loaded");
+        log.warn("Komodo Perldoc 0.1.2 loaded");
     };
 
     this.unload = function() {
@@ -68,13 +49,8 @@
         if (docs.preview && docs.preview.__komodoPerldoc) {
             docs.preview = originalPreview;
         }
-        if (docs.onPreviewReady && docs.onPreviewReady.__komodoPerldoc) {
-            docs.onPreviewReady = originalOnPreviewReady;
-        }
 
-        pending = null;
         originalPreview = null;
-        originalOnPreviewReady = null;
         loaded = false;
     };
 }).apply(module.exports);
