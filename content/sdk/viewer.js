@@ -5,15 +5,26 @@
     const perldoc  = require("./perldoc");
     const debug    = require("./debug");
 
-    const scope   = Cc["@activestate.com/commando/koScopeDocs;1"].getService(Ci.koIScopeDocs);
+    const SCOPE_DOCS_CONTRACT = "@activestate.com/commando/koScopeDocs;1";
     const _window = require("ko/windows").getMain();
 
     var lastSerial = 0;
 
     debug.trace("viewer", "module evaluated", {
-        hasScope: !!scope,
-        hasWindow: !!_window
+        hasWindow: !!_window,
+        scopeContractPresent: !!Cc[SCOPE_DOCS_CONTRACT]
     });
+
+    function scopeService() {
+        try {
+            var factory = Cc[SCOPE_DOCS_CONTRACT];
+            if (!factory) return null;
+            return factory.getService(Ci.koIScopeDocs);
+        } catch (e) {
+            debug.exception("viewer", "failed to obtain koScopeDocs service", e);
+            return null;
+        }
+    }
 
     function currentBrowser() {
         var preview = $("#doc-preview", _window);
@@ -23,7 +34,6 @@
 
     function describeBrowser(browser) {
         if (!browser) return {present: false};
-
         var result = {present: true, src: null, readyState: null};
         try { result.src = browser.getAttribute("src"); } catch (e) {}
         try { result.readyState = browser.contentDocument && browser.contentDocument.readyState; } catch (e) {}
@@ -32,12 +42,8 @@
 
     function decodeInfo(first, second) {
         var raw = null;
-
-        if (typeof second == "string" && second) {
-            raw = second;
-        } else if (typeof first == "string" && first) {
-            raw = first;
-        }
+        if (typeof second == "string" && second) raw = second;
+        else if (typeof first == "string" && first) raw = first;
 
         debug.trace("viewer", "scope.info() payload inspected", {
             firstType: typeof first,
@@ -51,12 +57,19 @@
         return JSON.parse(raw);
     }
 
+    function pageHeading(viewWindow) {
+        try {
+            var wrapper = viewWindow.document.getElementById("wrapper");
+            var heading = wrapper && wrapper.querySelector && wrapper.querySelector("h1, h2");
+            return heading ? String(heading.textContent || "").replace(/^\s+|\s+$/g, "") : "";
+        } catch (e) {
+            return "";
+        }
+    }
+
     function renderSection(viewWindow, title, body) {
         var wrapper = viewWindow.document.getElementById("wrapper");
-        if (!wrapper) {
-            debug.trace("viewer", "renderSection(): wrapper is missing", {title: title});
-            return false;
-        }
+        if (!wrapper) return false;
 
         var section = viewWindow.document.getElementById("komodo-perldoc");
         if (!section) {
@@ -93,107 +106,76 @@
 
     function waitForStockRender(data, serial, browser, callback, attempt) {
         attempt = attempt || 0;
-        if (serial != lastSerial) {
-            debug.trace("viewer", "waitForStockRender() cancelled: stale serial", {
-                serial: serial,
-                lastSerial: lastSerial,
-                name: data.name
-            });
-            return;
-        }
+        if (serial != lastSerial) return;
 
         var current = currentBrowser();
         if (!browser) browser = current;
-
-        if (!browser || current !== browser) {
-            debug.trace("viewer", "waitForStockRender() cancelled: browser changed", {
-                serial: serial,
-                expected: describeBrowser(browser),
-                current: describeBrowser(current),
-                name: data.name
-            });
-            return;
-        }
+        if (!browser || current !== browser) return;
 
         var viewWindow = browser.contentWindow;
         var wrapper = viewWindow && viewWindow.document && viewWindow.document.getElementById("wrapper");
-        var text = wrapper ? (wrapper.textContent || "") : "";
-        var ready = !!(wrapper && wrapper.firstChild && (!data.name || text.indexOf(data.name) != -1));
-
-        if (attempt === 0 || attempt === 5 || attempt === 10 || attempt === 20 || attempt === 40 || attempt === 80) {
-            debug.trace("viewer", "waiting for stock Documentation render", {
-                serial: serial,
-                attempt: attempt,
-                name: data.name,
-                wrapper: !!wrapper,
-                firstChild: !!(wrapper && wrapper.firstChild),
-                textLength: text.length,
-                containsName: data.name ? text.indexOf(data.name) != -1 : null,
-                browser: describeBrowser(browser)
-            });
-        }
+        var heading = viewWindow ? pageHeading(viewWindow) : "";
+        var ready = !!(wrapper && wrapper.firstChild && heading == data.name);
 
         if (!ready) {
-            if (attempt >= 80) {
-                debug.trace("viewer", "stock preview did not become ready", {
+            if (attempt === 0 || attempt === 5 || attempt === 10 || attempt === 20 || attempt === 40 || attempt === 80) {
+                debug.trace("viewer", "waiting for matching stock Documentation render", {
                     serial: serial,
+                    attempt: attempt,
                     name: data.name,
-                    textSample: text.substr(0, 300)
+                    heading: heading,
+                    wrapper: !!wrapper,
+                    browser: describeBrowser(browser)
                 });
-                return;
             }
-
+            if (attempt >= 80) return;
             timers.setTimeout(function() {
                 waitForStockRender(data, serial, browser, callback, attempt + 1);
             }, 25);
             return;
         }
 
-        debug.trace("viewer", "stock Documentation render is ready", {
+        debug.trace("viewer", "matching stock Documentation render is ready", {
             serial: serial,
             name: data.name,
-            attempt: attempt
+            attempt: attempt,
+            heading: heading
         });
         callback(viewWindow);
     }
 
     this.schedule = function(index, serial, browser) {
         lastSerial = serial;
-
         debug.trace("viewer", "schedule() entered", {
             index: index,
             serial: serial,
             browser: describeBrowser(browser)
         });
 
+        var scope = scopeService();
+        if (!scope) {
+            debug.trace("viewer", "schedule() aborted: koScopeDocs service unavailable", {
+                index: index,
+                contract: SCOPE_DOCS_CONTRACT
+            });
+            return;
+        }
+
         try {
             scope.info(index, function(first, second) {
-                debug.trace("viewer", "scope.info() callback fired", {
-                    index: index,
-                    serial: serial,
-                    stale: serial != lastSerial
-                });
-
                 if (serial != lastSerial) return;
 
                 var data;
-                try {
-                    data = decodeInfo(first, second);
-                } catch (e) {
+                try { data = decodeInfo(first, second); }
+                catch (e) {
                     debug.exception("viewer", "could not decode scope-docs entry data", e);
                     return;
                 }
-
-                if (!data) {
-                    debug.trace("viewer", "scope-docs returned no entry data", {index: index});
-                    return;
-                }
+                if (!data) return;
 
                 var parents = [];
                 if (data.parents && data.parents.length) {
-                    for (var i = 0; i < data.parents.length; i++) {
-                        parents.push(data.parents[i].name || "");
-                    }
+                    for (var i = 0; i < data.parents.length; i++) parents.push(data.parents[i].name || "");
                 }
 
                 debug.trace("viewer", "decoded CIX entry", {
@@ -206,28 +188,19 @@
                     parents: parents
                 });
 
-                if (data.doc_name != "Perl") {
-                    debug.trace("viewer", "skipping entry: not Perl", {doc_name: data.doc_name, name: data.name});
-                    return;
-                }
+                if (data.doc_name != "Perl") return;
                 if (data.doc && String(data.doc).trim()) {
-                    debug.trace("viewer", "skipping entry: CIX doc already exists", {
+                    debug.trace("viewer", "CIX doc exists; stock preview left untouched", {
                         name: data.name,
                         docLength: String(data.doc).length
                     });
                     return;
                 }
 
-                debug.trace("viewer", "empty Perl CIX doc; local lookup required", {
-                    name: data.name,
-                    parents: parents
-                });
-
                 waitForStockRender(data, serial, browser, function(viewWindow) {
                     if (serial != lastSerial) return;
-
                     renderSection(viewWindow, data.name, "Loading local documentation…");
-                    debug.trace("viewer", "calling perldoc.lookup()", {name: data.name});
+                    debug.trace("viewer", "calling perldoc.lookup()", {name: data.name, parents: parents});
 
                     perldoc.lookup(data, function(result) {
                         debug.trace("viewer", "perldoc.lookup() callback", {
@@ -242,12 +215,10 @@
                         });
 
                         if (serial != lastSerial || !stillShowing(viewWindow)) return;
-
                         if (result.ok) {
                             renderSection(viewWindow, result.title || data.name, result.output);
                             return;
                         }
-
                         var message = result.error || result.output || "Local Pod::Perldoc returned no documentation.";
                         renderSection(viewWindow, result.title || data.name, message);
                     });
