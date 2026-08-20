@@ -22,6 +22,10 @@
     var eventBindings = [];
     var browserLoadTarget = null;
     var browserLoadHandler = null;
+    var rootGuardDocument = null;
+    var rootGuardClickHandler = null;
+    var rootGuardKeyHandler = null;
+    var rootRedirectPending = false;
 
     // Commando renders Documentation asynchronously.  A short, bounded retry
     // burst covers selection -> browser creation -> stock render without the
@@ -130,12 +134,148 @@
         retryTimers = [];
     }
 
+    function detachRootNavigationGuard() {
+        if (rootGuardDocument) {
+            if (rootGuardClickHandler) {
+                try { rootGuardDocument.removeEventListener("click", rootGuardClickHandler, true); } catch (e) {}
+            }
+            if (rootGuardKeyHandler) {
+                try { rootGuardDocument.removeEventListener("keydown", rootGuardKeyHandler, true); } catch (e) {}
+                try { rootGuardDocument.removeEventListener("keypress", rootGuardKeyHandler, true); } catch (e) {}
+            }
+        }
+        rootGuardDocument = null;
+        rootGuardClickHandler = null;
+        rootGuardKeyHandler = null;
+        rootRedirectPending = false;
+    }
+
+    function perlRootLink(doc) {
+        try {
+            var link = doc && doc.querySelector && doc.querySelector("#wrapper a[index='0']");
+            if (!link) return null;
+            var text = String(link.textContent || "").replace(/\s+/g, " ").trim();
+            return text == "Perl" ? link : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function indexedAncestor(node, doc) {
+        var wrapper = null;
+        try { wrapper = doc && doc.getElementById("wrapper"); } catch (e) {}
+        while (node && node !== doc) {
+            if (node === wrapper) break;
+            try {
+                if (node.getAttribute && node.getAttribute("index") !== null) return node;
+            } catch (e) {}
+            node = node.parentNode;
+        }
+        return null;
+    }
+
+    function stopNavigationEvent(event) {
+        try { event.preventDefault(); } catch (e) {}
+        try { event.stopPropagation(); } catch (e) {}
+        try { event.stopImmediatePropagation(); } catch (e) {}
+    }
+
+    function showPerlRoot(reason, doc) {
+        if (rootRedirectPending) return;
+        rootRedirectPending = true;
+
+        debug.trace("monitor", "intercepted invalid scope-docs Perl root index; returning to Perl subscope", {
+            reason: reason,
+            rootIndex: 0,
+            rootResultId: "docs-Perl"
+        });
+
+        timers.setTimeout(function() {
+            try {
+                if (typeof commando.showSubscope == "function") {
+                    // koScopeDocs exposes Perl as the synthetic scope result
+                    // `docs-Perl`; its breadcrumb index=0 is not a DB entry.
+                    commando.showSubscope("scope-docs", "docs-Perl");
+                } else {
+                    // Defensive fallback for older Commando implementations.
+                    commando.show("scope-docs");
+                }
+                debug.trace("monitor", "Perl root redirect dispatched", {
+                    via: typeof commando.showSubscope == "function" ? "showSubscope" : "show"
+                });
+            } catch (e) {
+                debug.exception("monitor", "failed to return to Perl documentation root", e);
+            }
+
+            timers.setTimeout(function() {
+                rootRedirectPending = false;
+            }, 250);
+        }, 0);
+    }
+
+    function installRootNavigationGuard(browser) {
+        var doc = null;
+        try { doc = browser && browser.contentDocument; } catch (e) {}
+        if (!doc || doc === rootGuardDocument) return;
+
+        detachRootNavigationGuard();
+        rootGuardDocument = doc;
+
+        rootGuardClickHandler = function(event) {
+            if (!started || !isPerlDocs() || !perlRootLink(doc)) return;
+
+            var indexed = indexedAncestor(event.target, doc);
+            if (!indexed) return;
+
+            var index = null;
+            try { index = indexed.getAttribute("index"); } catch (e) {}
+            if (String(index) != "0") return;
+
+            stopNavigationEvent(event);
+            showPerlRoot("click", doc);
+        };
+
+        rootGuardKeyHandler = function(event) {
+            if (!started || !isPerlDocs() || !perlRootLink(doc)) return;
+            if (event.ctrlKey || event.altKey || event.metaKey) return;
+
+            var key = "";
+            var code = 0;
+            try { key = event.key || ""; } catch (e) {}
+            try { code = event.which || event.keyCode || event.charCode || 0; } catch (e) {}
+            if (key != "1" && code != 49 && code != 97) return;
+
+            var shortcut = null;
+            try { shortcut = doc.querySelector("#wrapper .link-key[link-index='1'][index='0']"); } catch (e) {}
+            if (!shortcut) return;
+
+            stopNavigationEvent(event);
+            showPerlRoot("keyboard shortcut 1", doc);
+        };
+
+        try {
+            doc.addEventListener("click", rootGuardClickHandler, true);
+            doc.addEventListener("keydown", rootGuardKeyHandler, true);
+            doc.addEventListener("keypress", rootGuardKeyHandler, true);
+            debug.trace("monitor", "installed guard for synthetic Perl root breadcrumb", {
+                browserId: browserId(browser),
+                documentId: documentId(browser),
+                browserSrc: browserSrc(browser),
+                rootPresent: !!perlRootLink(doc)
+            });
+        } catch (e) {
+            debug.exception("monitor", "could not install Perl root navigation guard", e);
+            detachRootNavigationGuard();
+        }
+    }
+
     function detachBrowserLoad() {
         if (browserLoadTarget && browserLoadHandler) {
             try { browserLoadTarget.removeEventListener("load", browserLoadHandler, true); } catch (e) {}
         }
         browserLoadTarget = null;
         browserLoadHandler = null;
+        detachRootNavigationGuard();
     }
 
     function refreshBrowserLoadBinding() {
@@ -147,11 +287,13 @@
 
         browserLoadTarget = browser;
         browserLoadHandler = function() {
+            installRootNavigationGuard(browser);
             scheduleBurst("documentation browser load", 20);
         };
 
         try {
             browser.addEventListener("load", browserLoadHandler, true);
+            installRootNavigationGuard(browser);
             debug.trace("monitor", "observing Documentation browser load lifecycle", {
                 browserId: browserId(browser),
                 browserSrc: browserSrc(browser)
@@ -172,6 +314,8 @@
         var selected = selectedEntry();
         var browser = currentBrowser();
         if (!selected || !browser || !pageReady(browser)) return;
+
+        installRootNavigationGuard(browser);
 
         var heading = pageHeading(browser);
         var bid = browserId(browser);
