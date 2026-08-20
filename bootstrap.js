@@ -1,9 +1,10 @@
 const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 
-const VERSION = "0.1.4";
+const VERSION = "0.1.6";
 const PREFIX = "[komodo-perldoc " + VERSION + "]";
 const SCOPE_DOCS_CONTRACT = "@activestate.com/commando/koScopeDocs;1";
+const LOADED_MARKER = "__komodoPerldocLoaded";
 const RETRY_DELAY_MS = 100;
 const RETRY_LIMIT = 150;
 
@@ -84,7 +85,7 @@ function loadIntoWindow(window, attempt) {
         return;
     }
 
-    if (window.__komodoPerldoc014Loaded) {
+    if (window[LOADED_MARKER]) {
         trace("loadIntoWindow() ignored: already loaded into this window");
         return;
     }
@@ -95,7 +96,7 @@ function loadIntoWindow(window, attempt) {
         trace("scope-docs component ready; requiring komodo-perldoc/main");
         var main = require("komodo-perldoc/main");
         main.load();
-        window.__komodoPerldoc014Loaded = true;
+        window[LOADED_MARKER] = true;
         trace("main.load() completed");
     } catch (e) {
         var text = "";
@@ -114,7 +115,7 @@ function unloadFromWindow(window) {
     try {
         window.require.setRequirePath("komodo-perldoc/", "chrome://komodo-perldoc/content/sdk/");
         window.require("komodo-perldoc/main").unload();
-        try { delete window.__komodoPerldoc014Loaded; } catch (e) {}
+        try { delete window[LOADED_MARKER]; } catch (e) {}
         trace("main.unload() completed");
     } catch (e) {
         trace("main.unload() failed", String(e));
