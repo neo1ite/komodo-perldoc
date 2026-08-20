@@ -22,15 +22,12 @@
     var eventBindings = [];
     var browserLoadTarget = null;
     var browserLoadHandler = null;
-    var rootGuardDocument = null;
-    var rootGuardClickHandler = null;
-    var rootGuardKeyHandler = null;
     var rootRedirectPending = false;
 
-    // Commando renders Documentation asynchronously.  A short, bounded retry
-    // burst covers selection -> browser creation -> stock render without the
-    // permanent 250 ms poll used by 0.1.4.
+    // Documentation rendering is asynchronous, but a permanent poll is not
+    // necessary.  Each real UI event gets only this bounded retry burst.
     var RETRY_DELAYS = [0, 75, 175, 350, 700, 1400];
+    var ROOT_RETRY_DELAYS = [0, 60, 140, 300, 600];
 
     function currentBrowser() {
         var browser = $("#doc-preview", _window);
@@ -39,9 +36,8 @@
 
     function browserId(browser) {
         if (!browser) return null;
-        if (!browser.__komodoPerldocMonitorId) {
+        if (!browser.__komodoPerldocMonitorId)
             browser.__komodoPerldocMonitorId = ++browserSeq;
-        }
         return browser.__komodoPerldocMonitorId;
     }
 
@@ -62,17 +58,6 @@
     function browserSrc(browser) {
         try { return browser ? browser.getAttribute("src") : null; }
         catch (e) { return null; }
-    }
-
-    function stockMarkupSample(browser) {
-        try {
-            var doc = browser && browser.contentDocument;
-            var wrapper = doc && doc.getElementById("wrapper");
-            var html = wrapper && wrapper.innerHTML ? String(wrapper.innerHTML) : "";
-            return html.length > 1800 ? html.substr(0, 1800) + "…" : html;
-        } catch (e) {
-            return "<unavailable: " + e + ">";
-        }
     }
 
     function isPerlDocs() {
@@ -97,7 +82,6 @@
 
         var text = elem.textContent ? String(elem.textContent).replace(/\s+/g, " ").trim() : "";
         var nameMatch = /^\d+\s+([^\s]+)/.exec(text);
-
         return {
             index: match[1],
             id: id,
@@ -108,8 +92,8 @@
 
     function pageHeading(browser) {
         try {
-            var w = browser && browser.contentWindow;
-            var wrapper = w && w.document && w.document.getElementById("wrapper");
+            var doc = browser && browser.contentDocument;
+            var wrapper = doc && doc.getElementById("wrapper");
             var heading = wrapper && wrapper.querySelector && wrapper.querySelector("h1, h2");
             return heading ? String(heading.textContent || "").replace(/^\s+|\s+$/g, "") : "";
         } catch (e) {
@@ -119,9 +103,9 @@
 
     function pageReady(browser) {
         try {
-            return !!(browser && browser.contentDocument && browser.contentDocument.readyState == "complete" &&
-                      browser.contentWindow && browser.contentWindow.document &&
-                      browser.contentWindow.document.getElementById("wrapper"));
+            return !!(browser && browser.contentDocument &&
+                      browser.contentDocument.readyState == "complete" &&
+                      browser.contentDocument.getElementById("wrapper"));
         } catch (e) {
             return false;
         }
@@ -134,20 +118,24 @@
         retryTimers = [];
     }
 
-    function detachRootNavigationGuard() {
-        if (rootGuardDocument) {
-            if (rootGuardClickHandler) {
-                try { rootGuardDocument.removeEventListener("click", rootGuardClickHandler, true); } catch (e) {}
-            }
-            if (rootGuardKeyHandler) {
-                try { rootGuardDocument.removeEventListener("keydown", rootGuardKeyHandler, true); } catch (e) {}
-                try { rootGuardDocument.removeEventListener("keypress", rootGuardKeyHandler, true); } catch (e) {}
-            }
+    function stopNavigationEvent(event) {
+        try { event.preventDefault(); } catch (e) {}
+        try { event.stopPropagation(); } catch (e) {}
+        try { event.stopImmediatePropagation(); } catch (e) {}
+    }
+
+    function indexedAncestor(node, doc) {
+        var wrapper = null;
+        try { wrapper = doc && doc.getElementById("wrapper"); } catch (e) {}
+        while (node && node !== doc) {
+            if (node === wrapper) break;
+            try {
+                if (node.getAttribute && node.getAttribute("index") !== null)
+                    return node;
+            } catch (e) {}
+            node = node.parentNode;
         }
-        rootGuardDocument = null;
-        rootGuardClickHandler = null;
-        rootGuardKeyHandler = null;
-        rootRedirectPending = false;
+        return null;
     }
 
     function perlRootLink(doc) {
@@ -161,84 +149,155 @@
         }
     }
 
-    function indexedAncestor(node, doc) {
-        var wrapper = null;
-        try { wrapper = doc && doc.getElementById("wrapper"); } catch (e) {}
-        while (node && node !== doc) {
-            if (node === wrapper) break;
-            try {
-                if (node.getAttribute && node.getAttribute("index") !== null) return node;
-            } catch (e) {}
-            node = node.parentNode;
+    function normalizeStockLabels(doc) {
+        if (!doc || !doc.querySelectorAll) return;
+        var replacements = {
+            "Classs": "Classes",
+            "Propertys": "Properties"
+        };
+        var headings;
+        try { headings = doc.querySelectorAll("#wrapper h2"); }
+        catch (e) { return; }
+
+        for (var i = 0; i < headings.length; i++) {
+            var heading = headings[i];
+            var text = String(heading.textContent || "").replace(/^\s+|\s+$/g, "");
+            if (!(text in replacements)) continue;
+            heading.textContent = replacements[text];
+            debug.trace("monitor", "normalized stock scope-docs plural label", {
+                from: text,
+                to: replacements[text]
+            });
         }
-        return null;
     }
 
-    function stopNavigationEvent(event) {
-        try { event.preventDefault(); } catch (e) {}
-        try { event.stopPropagation(); } catch (e) {}
-        try { event.stopImmediatePropagation(); } catch (e) {}
+    function perlRootResult() {
+        var result = $("#commando-results richlistitem[result-id='docs-Perl']", _window);
+        if (!result.length) result = $("#commando-results [result-id='docs-Perl']", _window);
+        return result.length ? result.element() : null;
     }
 
-    function showPerlRoot(reason, doc) {
+    function enterPerlSubscopeLegacy(reason) {
+        if (typeof commando.selectScope != "function" ||
+            typeof commando.setSubscope != "function") {
+            debug.trace("monitor", "cannot return to Perl root: required legacy Commando APIs unavailable", {
+                reason: reason,
+                selectScope: typeof commando.selectScope,
+                setSubscope: typeof commando.setSubscope,
+                show: typeof commando.show
+            });
+            if (typeof commando.show == "function") commando.show("scope-docs");
+            return;
+        }
+
+        var panel = $("#commando-panel", _window);
+        if (panel.length) {
+            panel.removeClass("maximized");
+            panel.removeClass("quick-search");
+        }
+
+        function selectRenderedPerlResult(attempt) {
+            var elem = perlRootResult();
+            if (elem && elem.resultData) {
+                try {
+                    commando.setSubscope(elem.resultData, true);
+                    debug.trace("monitor", "returned to Perl documentation root via legacy Commando API", {
+                        reason: reason,
+                        attempt: attempt,
+                        resultId: elem.getAttribute("result-id") || "docs-Perl"
+                    });
+                    return;
+                } catch (e) {
+                    debug.exception("monitor", "legacy setSubscope(docs-Perl) failed", e);
+                    return;
+                }
+            }
+
+            if (attempt + 1 >= ROOT_RETRY_DELAYS.length) {
+                debug.trace("monitor", "Perl root result did not render in time", {
+                    reason: reason,
+                    attempts: ROOT_RETRY_DELAYS.length
+                });
+                return;
+            }
+
+            timers.setTimeout(function() {
+                selectRenderedPerlResult(attempt + 1);
+            }, ROOT_RETRY_DELAYS[attempt + 1]);
+        }
+
+        try {
+            // selectScope() clears the old symbol subscope and performs a fresh
+            // empty search.  Its callback is fired when scope-docs completes;
+            // result painting itself may still lag slightly, hence the bounded
+            // DOM retries above.  This mirrors newer Commando.showSubscope().
+            commando.selectScope("scope-docs", function() {
+                selectRenderedPerlResult(0);
+            });
+            debug.trace("monitor", "legacy Perl root navigation dispatched", {
+                reason: reason,
+                via: "selectScope + setSubscope"
+            });
+        } catch (e) {
+            debug.exception("monitor", "legacy Perl root navigation failed", e);
+        }
+    }
+
+    function showPerlRoot(reason) {
         if (rootRedirectPending) return;
         rootRedirectPending = true;
 
-        debug.trace("monitor", "intercepted invalid scope-docs Perl root index; returning to Perl subscope", {
+        debug.trace("monitor", "intercepted synthetic scope-docs Perl root index", {
             reason: reason,
             rootIndex: 0,
-            rootResultId: "docs-Perl"
+            showSubscope: typeof commando.showSubscope,
+            selectScope: typeof commando.selectScope,
+            setSubscope: typeof commando.setSubscope
         });
 
         timers.setTimeout(function() {
             try {
                 if (typeof commando.showSubscope == "function") {
-                    // koScopeDocs exposes Perl as the synthetic scope result
-                    // `docs-Perl`; its breadcrumb index=0 is not a DB entry.
                     commando.showSubscope("scope-docs", "docs-Perl");
+                    debug.trace("monitor", "Perl root navigation dispatched", {via: "showSubscope"});
                 } else {
-                    // Defensive fallback for older Commando implementations.
-                    commando.show("scope-docs");
+                    enterPerlSubscopeLegacy(reason);
                 }
-                debug.trace("monitor", "Perl root redirect dispatched", {
-                    via: typeof commando.showSubscope == "function" ? "showSubscope" : "show"
-                });
             } catch (e) {
                 debug.exception("monitor", "failed to return to Perl documentation root", e);
             }
 
             timers.setTimeout(function() {
                 rootRedirectPending = false;
-            }, 250);
+            }, 800);
         }, 0);
     }
 
-    function installRootNavigationGuard(browser) {
+    function installStockPageFixes(browser) {
         var doc = null;
         try { doc = browser && browser.contentDocument; } catch (e) {}
-        if (!doc || doc === rootGuardDocument) return;
+        if (!doc) return;
 
-        detachRootNavigationGuard();
-        rootGuardDocument = doc;
+        normalizeStockLabels(doc);
 
-        rootGuardClickHandler = function(event) {
+        if (doc.__komodoPerldocStockFixesInstalled) return;
+        doc.__komodoPerldocStockFixesInstalled = true;
+
+        var clickHandler = function(event) {
             if (!started || !isPerlDocs() || !perlRootLink(doc)) return;
-
             var indexed = indexedAncestor(event.target, doc);
             if (!indexed) return;
-
             var index = null;
             try { index = indexed.getAttribute("index"); } catch (e) {}
             if (String(index) != "0") return;
 
             stopNavigationEvent(event);
-            showPerlRoot("click", doc);
+            showPerlRoot("click");
         };
 
-        rootGuardKeyHandler = function(event) {
+        var keyHandler = function(event) {
             if (!started || !isPerlDocs() || !perlRootLink(doc)) return;
             if (event.ctrlKey || event.altKey || event.metaKey) return;
-
             var key = "";
             var code = 0;
             try { key = event.key || ""; } catch (e) {}
@@ -246,26 +305,26 @@
             if (key != "1" && code != 49 && code != 97) return;
 
             var shortcut = null;
-            try { shortcut = doc.querySelector("#wrapper .link-key[link-index='1'][index='0']"); } catch (e) {}
+            try { shortcut = doc.querySelector("#wrapper .link-key[link-index='1'][index='0']"); }
+            catch (e) {}
             if (!shortcut) return;
 
             stopNavigationEvent(event);
-            showPerlRoot("keyboard shortcut 1", doc);
+            showPerlRoot("keyboard shortcut 1");
         };
 
         try {
-            doc.addEventListener("click", rootGuardClickHandler, true);
-            doc.addEventListener("keydown", rootGuardKeyHandler, true);
-            doc.addEventListener("keypress", rootGuardKeyHandler, true);
-            debug.trace("monitor", "installed guard for synthetic Perl root breadcrumb", {
+            doc.addEventListener("click", clickHandler, true);
+            doc.addEventListener("keydown", keyHandler, true);
+            doc.addEventListener("keypress", keyHandler, true);
+            debug.trace("monitor", "installed stock scope-docs fixes", {
                 browserId: browserId(browser),
                 documentId: documentId(browser),
                 browserSrc: browserSrc(browser),
-                rootPresent: !!perlRootLink(doc)
+                perlRootPresent: !!perlRootLink(doc)
             });
         } catch (e) {
-            debug.exception("monitor", "could not install Perl root navigation guard", e);
-            detachRootNavigationGuard();
+            debug.exception("monitor", "could not install stock scope-docs fixes", e);
         }
     }
 
@@ -275,25 +334,27 @@
         }
         browserLoadTarget = null;
         browserLoadHandler = null;
-        detachRootNavigationGuard();
     }
 
     function refreshBrowserLoadBinding() {
         var browser = currentBrowser();
-        if (browser === browserLoadTarget) return;
+        if (browser === browserLoadTarget) {
+            installStockPageFixes(browser);
+            return;
+        }
 
         detachBrowserLoad();
         if (!browser) return;
 
         browserLoadTarget = browser;
         browserLoadHandler = function() {
-            installRootNavigationGuard(browser);
+            installStockPageFixes(browser);
             scheduleBurst("documentation browser load", 20);
         };
 
         try {
             browser.addEventListener("load", browserLoadHandler, true);
-            installRootNavigationGuard(browser);
+            installStockPageFixes(browser);
             debug.trace("monitor", "observing Documentation browser load lifecycle", {
                 browserId: browserId(browser),
                 browserSrc: browserSrc(browser)
@@ -315,16 +376,15 @@
         var browser = currentBrowser();
         if (!selected || !browser || !pageReady(browser)) return;
 
-        installRootNavigationGuard(browser);
+        installStockPageFixes(browser);
 
         var heading = pageHeading(browser);
         var bid = browserId(browser);
         var did = documentId(browser);
         var src = browserSrc(browser);
 
-        // A maximized scope-docs viewer keeps the original Commando result
-        // selected while its own breadcrumbs navigate to another page.  Treat
-        // that as stock viewer navigation, not as a new augmentation target.
+        // Maximized scope-docs keeps the original result selected while its own
+        // links navigate elsewhere.  Never attach perldoc to that other page.
         if (selected.name && heading && selected.name != heading) {
             var mismatchKey = [selected.index, bid, did, heading].join("|");
             if (mismatchKey != lastMismatchKey) {
@@ -337,18 +397,13 @@
                     heading: heading,
                     browserId: bid,
                     documentId: did,
-                    browserSrc: src,
-                    stockMarkupSample: stockMarkupSample(browser)
+                    browserSrc: src
                 });
             }
             return;
         }
 
         lastMismatchKey = null;
-
-        // Include the document identity.  The same <browser> element may load a
-        // fresh stock document with the same src/heading after Commando is
-        // reopened; that new document still needs augmentation.
         var key = [selected.index, bid, did, heading].join("|");
         if (key == lastKey) return;
         lastKey = key;
@@ -367,23 +422,20 @@
             browserSrc: src,
             heading: heading
         });
-
         augmenter.schedule(selected.index, serial, browser);
     }
 
     function beginBurst(reason) {
         if (!started) return;
-
         clearRetryTimers();
         refreshBrowserLoadBinding();
 
         var generation = ++burstGeneration;
         for (var i = 0; i < RETRY_DELAYS.length; i++) {
             (function(attempt, delay) {
-                var timer = timers.setTimeout(function() {
+                retryTimers.push(timers.setTimeout(function() {
                     run(reason, attempt, generation);
-                }, delay);
-                retryTimers.push(timer);
+                }, delay));
             })(i, RETRY_DELAYS[i]);
         }
     }
@@ -467,6 +519,7 @@
         eventBindings = [];
         observedDocument = null;
         observedDocumentId = 0;
+        rootRedirectPending = false;
         lastKey = null;
         lastMismatchKey = null;
         debug.trace("monitor", "event-driven Commando monitor stopped");
