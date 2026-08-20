@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DIST="$ROOT/dist"
-OUT="$DIST/komodo-perldoc-0.1.xpi"
+OUT="$DIST/komodo-perldoc-0.1.1.xpi"
 
 command -v zip >/dev/null 2>&1 || {
     echo "build.sh: zip is required" >&2
