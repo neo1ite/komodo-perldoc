@@ -8,11 +8,11 @@ function loadIntoWindow(window) {
     var log = require("ko/logging").getLogger("komodo-perldoc-bootstrap");
 
     try {
-        // Do not depend on scope-docs having initialized before us.  Require
-        // paths are cheap to register and this makes startup ordering irrelevant.
+        // Do not depend on scope-docs having initialized before us.
         require.setRequirePath("scope-docs/", "chrome://scope-docs/content/sdk/");
         require.setRequirePath("komodo-perldoc/", "chrome://komodo-perldoc/content/sdk/");
         require("komodo-perldoc/main").load();
+        log.warn("Komodo Perldoc 0.1.2 bootstrap loaded into Komodo window");
     } catch (e) {
         log.exception(e, "Komodo Perldoc: failed to load");
     }
