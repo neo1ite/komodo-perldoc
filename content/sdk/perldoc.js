@@ -2,7 +2,7 @@
     const {Cc, Ci} = require("chrome");
     const prefs    = require("ko/prefs");
     const timers   = require("sdk/timers");
-    const log      = require("ko/logging").getLogger("komodo-perldoc-runner");
+    const debug    = require("./debug");
 
     const runSvc = Cc["@activestate.com/koRunService;1"].getService(Ci.koIRunService);
     const runtime = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime);
@@ -10,9 +10,19 @@
 
     var cache = {};
 
+    debug.trace("runner", "module evaluated", {
+        os: runtime.OS,
+        timeoutMs: TIMEOUT_MS
+    });
+
     function perlInterpreter() {
-        var perl = prefs.getString("perlDefaultInterpreter", "");
-        return perl || "perl";
+        var configured = prefs.getString("perlDefaultInterpreter", "");
+        var perl = configured || "perl";
+        debug.trace("runner", "resolved Perl interpreter", {
+            configured: configured || null,
+            selected: perl
+        });
+        return perl;
     }
 
     function quotePosix(value) {
@@ -64,6 +74,11 @@
             add(data.name);
         }
 
+        debug.trace("runner", "derived module candidates", {
+            name: data.name,
+            type: data.type,
+            candidates: result
+        });
         return result;
     }
 
@@ -84,6 +99,10 @@
             requests.push({kind: "module", args: [modules[i]], title: modules[i]});
         }
 
+        debug.trace("runner", "lookup request chain built", {
+            name: data.name,
+            requests: requests
+        });
         return requests;
     }
 
@@ -92,18 +111,42 @@
         return /(?:No documentation found for|No documentation for perl|No module found|No docs found for)/i.test(text);
     }
 
+    function sample(text) {
+        if (!text) return "";
+        text = String(text).replace(/\r/g, "");
+        return text.length > 500 ? text.substr(0, 500) + "…" : text;
+    }
+
     function runRequest(perl, request, callback) {
         var command = commandFor(perl, request.args);
         var process = null;
         var completed = false;
         var timeout = null;
 
-        log.warn("Komodo Perldoc: running " + request.kind + " lookup: " + command);
+        debug.trace("runner", "starting local perldoc process", {
+            kind: request.kind,
+            title: request.title,
+            command: command
+        });
 
         function finish(result) {
-            if (completed) return;
+            if (completed) {
+                debug.trace("runner", "finish() ignored: request already completed", {title: request.title});
+                return;
+            }
             completed = true;
             if (timeout) timers.clearTimeout(timeout);
+
+            debug.trace("runner", "request completed", {
+                title: result.title,
+                ok: !!result.ok,
+                miss: !!result.miss,
+                returncode: result.returncode,
+                outputLength: result.output ? result.output.length : 0,
+                errorLength: result.error ? result.error.length : 0,
+                stdoutSample: sample(result.output),
+                stderrSample: sample(result.error)
+            });
             callback(result);
         }
 
@@ -115,9 +158,14 @@
             var miss = isMiss(combined);
             var ok = returncode === 0 && !miss && !!stdout.trim();
 
-            log.warn("Komodo Perldoc: lookup finished for " + request.title +
-                     "; rc=" + returncode + "; stdout=" + stdout.length +
-                     "; stderr=" + stderr.length + "; miss=" + miss);
+            debug.trace("runner", "RunAsync callback fired", {
+                title: request.title,
+                returncode: returncode,
+                stdoutLength: stdout.length,
+                stderrLength: stderr.length,
+                miss: miss,
+                ok: ok
+            });
 
             finish({
                 ok: ok,
@@ -131,11 +179,14 @@
         };
 
         try {
-            // koIRunAsyncCallback is a [function] XPCOM interface, so Komodo's
-            // own JavaScript code passes a plain JS function here as well.
             process = runSvc.RunAsync(command, onComplete, null, null, null);
+            debug.trace("runner", "RunAsync returned process handle", {
+                title: request.title,
+                hasProcess: !!process,
+                uuid: process && process.uuid ? process.uuid : null
+            });
         } catch (e) {
-            log.exception(e, "Komodo Perldoc: failed to start Pod::Perldoc");
+            debug.exception("runner", "RunAsync threw while starting Pod::Perldoc", e);
             finish({
                 ok: false,
                 miss: false,
@@ -149,11 +200,20 @@
 
         timeout = timers.setTimeout(function() {
             if (completed) return;
-            try {
-                if (process && typeof process.kill == "function") process.kill(1);
-            } catch (e) {}
+            debug.trace("runner", "lookup timeout reached", {
+                title: request.title,
+                timeoutMs: TIMEOUT_MS
+            });
 
-            log.warn("Komodo Perldoc: lookup timed out for " + request.title);
+            try {
+                if (process && typeof process.kill == "function") {
+                    process.kill(1);
+                    debug.trace("runner", "timed-out process killed", {title: request.title});
+                }
+            } catch (e) {
+                debug.exception("runner", "failed to kill timed-out process", e);
+            }
+
             finish({
                 ok: false,
                 miss: false,
@@ -176,13 +236,21 @@
     }
 
     this.lookup = function(data, callback) {
+        debug.trace("runner", "lookup() entered", {
+            name: data && data.name,
+            type: data && data.type,
+            docName: data && data.doc_name
+        });
+
         var perl = perlInterpreter();
         var key = cacheKey(perl, data);
 
         if (key in cache) {
+            debug.trace("runner", "cache hit", {name: data.name, key: key});
             timers.setTimeout(function() { callback(cache[key]); }, 0);
             return;
         }
+        debug.trace("runner", "cache miss", {name: data.name, key: key});
 
         var requests = requestsFor(data);
         if (!requests.length) {
@@ -194,6 +262,7 @@
                 error: "No local perldoc lookup can be derived from this CIX entry."
             };
             cache[key] = empty;
+            debug.trace("runner", "no lookup requests could be derived", {name: data.name});
             timers.setTimeout(function() { callback(empty); }, 0);
             return;
         }
@@ -211,15 +280,31 @@
                     error: errors.join("\n\n") || "Local Pod::Perldoc returned no documentation."
                 };
                 cache[key] = failed;
+                debug.trace("runner", "all lookup candidates exhausted", {
+                    name: data.name,
+                    errors: errors
+                });
                 callback(failed);
                 return;
             }
 
             var request = requests[index++];
+            debug.trace("runner", "trying lookup candidate", {
+                name: data.name,
+                candidateIndex: index,
+                candidateCount: requests.length,
+                request: request
+            });
+
             runRequest(perl, request, function(result) {
                 if (result.ok) {
                     result.perl = perl;
                     cache[key] = result;
+                    debug.trace("runner", "lookup succeeded", {
+                        name: data.name,
+                        resolvedTitle: result.title,
+                        perl: perl
+                    });
                     callback(result);
                     return;
                 }
@@ -228,8 +313,13 @@
                 if (result.output && result.output.trim() && result.miss) errors.push(result.output.trim());
 
                 // A normal perldoc miss is expected for private module methods:
-                // continue to the containing module.  Execution failures stop.
+                // continue to the containing module. Execution failures stop.
                 if (result.miss || result.returncode === 1) {
+                    debug.trace("runner", "candidate missed; trying next", {
+                        title: result.title,
+                        returncode: result.returncode,
+                        miss: result.miss
+                    });
                     next();
                     return;
                 }
@@ -243,6 +333,11 @@
                     perl: perl
                 };
                 cache[key] = hardFailure;
+                debug.trace("runner", "hard lookup failure; stopping chain", {
+                    title: result.title,
+                    returncode: result.returncode,
+                    error: result.error
+                });
                 callback(hardFailure);
             });
         }
@@ -252,5 +347,6 @@
 
     this.clearCache = function() {
         cache = {};
+        debug.trace("runner", "cache cleared");
     };
 }).apply(module.exports);
