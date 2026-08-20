@@ -1,7 +1,7 @@
 const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.3";
 const PREFIX = "[komodo-perldoc " + VERSION + "]";
 
 function debugFile() {
