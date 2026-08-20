@@ -1,1 +1,2 @@
 content komodo-perldoc content/
+overlay chrome://komodo/content/komodo.xul chrome://komodo-perldoc/content/overlay.xul
