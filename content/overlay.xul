@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<overlay id="komodo-perldoc-overlay"
+         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+    <script type="application/javascript"
+            src="chrome://komodo-perldoc/content/overlay.js"/>
+</overlay>
