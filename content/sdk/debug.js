@@ -1,7 +1,7 @@
 (function() {
     const {Cc, Ci} = require("chrome");
 
-    const PREFIX = "[komodo-perldoc 0.1.3]";
+    const PREFIX = "[komodo-perldoc 0.1.4]";
     const consoleSvc = Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsIConsoleService);
     const dirSvc = Cc["@mozilla.org/file/directory_service;1"].getService(Ci.nsIProperties);
 
@@ -39,7 +39,7 @@
         try {
             var file = debugFile();
             var stream = Cc["@mozilla.org/network/file-output-stream;1"].createInstance(Ci.nsIFileOutputStream);
-            stream.init(file, 0x02 | 0x08 | 0x10, 420, 0); // write | create | append, 0644
+            stream.init(file, 0x02 | 0x08 | 0x10, 420, 0);
 
             var converter = Cc["@mozilla.org/intl/converter-output-stream;1"].createInstance(Ci.nsIConverterOutputStream);
             converter.init(stream, "UTF-8", 0, 0);
