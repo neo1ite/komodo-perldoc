@@ -15,6 +15,8 @@
     var serial = 0;
     var browserSeq = 0;
     var documentSeq = 0;
+    var observedDocument = null;
+    var observedDocumentId = 0;
     var lastKey = null;
     var lastMismatchKey = null;
     var eventBindings = [];
@@ -43,10 +45,11 @@
         try {
             var doc = browser && browser.contentDocument;
             if (!doc) return null;
-            if (!doc.__komodoPerldocMonitorId) {
-                doc.__komodoPerldocMonitorId = ++documentSeq;
+            if (doc !== observedDocument) {
+                observedDocument = doc;
+                observedDocumentId = ++documentSeq;
             }
-            return doc.__komodoPerldocMonitorId;
+            return observedDocumentId;
         } catch (e) {
             return null;
         }
@@ -55,6 +58,17 @@
     function browserSrc(browser) {
         try { return browser ? browser.getAttribute("src") : null; }
         catch (e) { return null; }
+    }
+
+    function stockMarkupSample(browser) {
+        try {
+            var doc = browser && browser.contentDocument;
+            var wrapper = doc && doc.getElementById("wrapper");
+            var html = wrapper && wrapper.innerHTML ? String(wrapper.innerHTML) : "";
+            return html.length > 1800 ? html.substr(0, 1800) + "…" : html;
+        } catch (e) {
+            return "<unavailable: " + e + ">";
+        }
     }
 
     function isPerlDocs() {
@@ -179,7 +193,8 @@
                     heading: heading,
                     browserId: bid,
                     documentId: did,
-                    browserSrc: src
+                    browserSrc: src,
+                    stockMarkupSample: stockMarkupSample(browser)
                 });
             }
             return;
@@ -306,6 +321,8 @@
             try { eventBindings[i].target.off(eventBindings[i].eventName, eventBindings[i].handler); } catch (e) {}
         }
         eventBindings = [];
+        observedDocument = null;
+        observedDocumentId = 0;
         lastKey = null;
         lastMismatchKey = null;
         debug.trace("monitor", "event-driven Commando monitor stopped");
