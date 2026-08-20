@@ -145,9 +145,12 @@
         var command = commandFor(perl, request.args);
         var process;
 
+        log.debug("Running " + request.kind + " perldoc lookup: " + command);
+
         try {
             process = runSvc.RunAndNotify(command, null, null, null);
         } catch (e) {
+            log.exception(e, "Komodo Perldoc: failed to start Pod::Perldoc");
             callback({
                 ok: false,
                 miss: false,
@@ -173,14 +176,24 @@
 
             var combined = (stdout + "\n" + stderr).trim();
             var miss = isMiss(combined);
-            callback({
+            var result = {
                 ok: !miss && !!stdout.trim(),
                 miss: miss,
                 title: request.title,
                 command: command,
                 output: stdout,
                 error: stderr
-            });
+            };
+
+            if (result.ok) {
+                log.debug("Perldoc lookup succeeded for " + request.title);
+            } else if (result.miss) {
+                log.debug("Perldoc lookup missed for " + request.title);
+            } else {
+                log.warn("Perldoc lookup failed for " + request.title + ": " + (stderr || stdout || "no output"));
+            }
+
+            callback(result);
         }
 
         function poll() {
@@ -193,10 +206,11 @@
 
             if (Date.now() - started >= TIMEOUT_MS) {
                 try {
-                    if (typeof process.kill == "function") process.kill();
+                    if (typeof process.kill == "function") process.kill(1);
                 } catch (e) {}
 
                 removeRunning(process);
+                log.warn("Perldoc lookup timed out for " + request.title);
                 callback({
                     ok: false,
                     miss: false,
@@ -229,6 +243,7 @@
         var key = cacheKey(perl, data);
 
         if (key in cache) {
+            log.debug("Using cached perldoc result for " + (data.name || "Perl"));
             timers.setTimeout(function() { callback(cache[key]); }, 0);
             return;
         }
@@ -246,6 +261,9 @@
             timers.setTimeout(function() { callback(empty); }, 0);
             return;
         }
+
+        log.debug("Looking up " + (data.name || "Perl") + " with " + perl + "; candidates: " +
+                  requests.map(function(request) { return request.kind + ":" + request.title; }).join(", "));
 
         var errors = [];
         var index = 0;
