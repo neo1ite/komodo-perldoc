@@ -8,8 +8,6 @@
     var started = false;
     var results = null;
     var clickHandler = null;
-    var originalShowSubscope = null;
-    var installedShowSubscopeShim = false;
 
     function isPerlDocs() {
         try {
@@ -51,7 +49,7 @@
 
         clickHandler = function() {
             // Komodo 9 Commando updates only the selection/tip on mouse click;
-            // unlike keyboard Up/Down it does not call onPreview().  Wait until
+            // unlike keyboard Up/Down it does not call onPreview(). Wait until
             // the XUL richlist selection has settled, then use the same stock
             // preview path as keyboard navigation.
             timers.setTimeout(function() {
@@ -81,79 +79,9 @@
         debug.trace("compat", "installed Komodo 9 mouse-preview compatibility fix");
     }
 
-    function returnToCurrentPerlSubscope() {
-        if (!isPerlDocs()) {
-            debug.trace("compat", "cannot return to Perl root: current Commando state is not Perl documentation");
-            return false;
-        }
-
-        var panel = $("#commando-panel", _window);
-        if (panel.length) {
-            panel.removeClass("maximized");
-            panel.removeClass("quick-search");
-        }
-
-        try {
-            // We are already inside scope-docs -> Perl when the synthetic
-            // breadcrumb is clicked.  Re-selecting scope-docs drops the Perl
-            // subscope and lands on the language list.  Preserve the existing
-            // subscope and simply clear the symbol query instead.
-            if (typeof commando.clear == "function") {
-                commando.clear();
-            } else if (typeof commando.search == "function") {
-                commando.search("");
-            } else {
-                debug.trace("compat", "cannot return to Perl root: clear/search APIs unavailable", {
-                    clear: typeof commando.clear,
-                    search: typeof commando.search
-                });
-                return false;
-            }
-
-            timers.setTimeout(function() {
-                try {
-                    if (typeof commando.focus == "function") commando.focus();
-                } catch (e) {}
-            }, 0);
-
-            debug.trace("compat", "returned to existing Perl documentation subscope", {
-                via: typeof commando.clear == "function" ? "clear" : "search"
-            });
-            return true;
-        } catch (e) {
-            debug.exception("compat", "failed to return to existing Perl documentation subscope", e);
-            return false;
-        }
-    }
-
-    function installShowSubscopeShim() {
-        if (typeof commando.showSubscope == "function") return;
-
-        originalShowSubscope = commando.showSubscope;
-        commando.showSubscope = function() {
-            var args = Array.prototype.slice.call(arguments);
-            var scopeId = args.shift();
-            var subscopeId = args.shift();
-
-            if (scopeId == "scope-docs" && subscopeId == "docs-Perl") {
-                return returnToCurrentPerlSubscope();
-            }
-
-            debug.trace("compat", "legacy showSubscope shim received unsupported target", {
-                scopeId: scopeId,
-                subscopeId: subscopeId
-            });
-            return false;
-        };
-        installedShowSubscopeShim = true;
-
-        debug.trace("compat", "installed Komodo 9 showSubscope compatibility shim");
-    }
-
     this.start = function() {
         if (started) return;
         started = true;
-        installShowSubscopeShim();
         installMousePreviewFix();
     };
 
@@ -166,17 +94,6 @@
         }
         results = null;
         clickHandler = null;
-
-        if (installedShowSubscopeShim) {
-            try {
-                if (originalShowSubscope === undefined)
-                    delete commando.showSubscope;
-                else
-                    commando.showSubscope = originalShowSubscope;
-            } catch (e) {}
-        }
-        originalShowSubscope = null;
-        installedShowSubscopeShim = false;
 
         debug.trace("compat", "Komodo 9 compatibility fixes stopped");
     };
