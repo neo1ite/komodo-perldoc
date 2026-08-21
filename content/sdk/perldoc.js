@@ -1,8 +1,9 @@
 (function() {
-    const {Cc, Ci} = require("chrome");
-    const prefs    = require("ko/prefs");
-    const timers   = require("sdk/timers");
-    const debug    = require("./debug");
+    const {Cc, Ci}  = require("chrome");
+    const prefs     = require("ko/prefs");
+    const timers    = require("sdk/timers");
+    const debug     = require("./debug");
+    const podSection = require("./pod-section");
 
     const runSvc = Cc["@activestate.com/koRunService;1"].getService(Ci.koIRunService);
     const runtime = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime);
@@ -41,15 +42,33 @@
         return runtime.OS == "WINNT" ? quoteWindows(value) : quotePosix(value);
     }
 
-    function commandFor(perl, args) {
-        var argv = [
-            perl,
-            "-MPod::Perldoc",
-            "-e",
-            "Pod::Perldoc->run()",
-            "--",
-            "-T"
-        ].concat(args);
+    function commandFor(perl, request) {
+        var argv;
+
+        if (request.kind == "symbol") {
+            // Keep the helper as one shell argument.  It does not load the
+            // target module; it only scans the selected Perl's @INC and parses
+            // the matching POD block with Pod::Simple::Text.
+            var source = String(podSection.PERL_SOURCE || "").replace(/\r?\n/g, " ");
+            argv = [
+                perl,
+                "-e",
+                source,
+                "--",
+                request.module,
+                request.symbol
+            ];
+        } else {
+            argv = [
+                perl,
+                "-MPod::Perldoc",
+                "-e",
+                "Pod::Perldoc->run()",
+                "--",
+                "-T"
+            ].concat(request.args || []);
+        }
+
         return argv.map(quote).join(" ");
     }
 
@@ -91,12 +110,29 @@
         }
 
         if (data.type == "function") {
+            // Keep builtins first: stat/split/etc. are documented by perlfunc
+            // and should not be confused with a same-named method in a module.
             requests.push({kind: "function", args: ["-f", name], title: name});
         }
 
         var modules = moduleCandidates(data);
-        for (var i = 0; i < modules.length; i++) {
-            requests.push({kind: "module", args: [modules[i]], title: modules[i]});
+        var isModuleEntry = data.type == "class" || data.type == "interface" || /::/.test(name);
+
+        if (name && !isModuleEntry) {
+            for (var i = 0; i < modules.length; i++) {
+                requests.push({
+                    kind: "symbol",
+                    module: modules[i],
+                    symbol: name,
+                    title: modules[i] + "::" + name
+                });
+            }
+        }
+
+        // Full-module POD remains the final safety net.  0.2.x only changes
+        // its priority: a matching method/function section wins when present.
+        for (var j = 0; j < modules.length; j++) {
+            requests.push({kind: "module", args: [modules[j]], title: modules[j]});
         }
 
         debug.trace("runner", "lookup request chain built", {
@@ -108,7 +144,7 @@
 
     function isMiss(text) {
         if (!text || !text.trim()) return true;
-        return /(?:No documentation found for|No documentation for perl|No module found|No docs found for)/i.test(text);
+        return /(?:No documentation found for|No documentation for perl|No module found|No docs found for|No symbol POD found for)/i.test(text);
     }
 
     function sample(text) {
@@ -118,7 +154,7 @@
     }
 
     function runRequest(perl, request, callback) {
-        var command = commandFor(perl, request.args);
+        var command = commandFor(perl, request);
         var process = null;
         var completed = false;
         var timeout = null;
@@ -126,6 +162,8 @@
         debug.trace("runner", "starting local perldoc process", {
             kind: request.kind,
             title: request.title,
+            module: request.module || null,
+            symbol: request.symbol || null,
             command: command
         });
 
@@ -138,6 +176,7 @@
             if (timeout) timers.clearTimeout(timeout);
 
             debug.trace("runner", "request completed", {
+                kind: request.kind,
                 title: result.title,
                 ok: !!result.ok,
                 miss: !!result.miss,
@@ -159,6 +198,7 @@
             var ok = returncode === 0 && !miss && !!stdout.trim();
 
             debug.trace("runner", "RunAsync callback fired", {
+                kind: request.kind,
                 title: request.title,
                 returncode: returncode,
                 stdoutLength: stdout.length,
@@ -170,6 +210,7 @@
             finish({
                 ok: ok,
                 miss: miss,
+                kind: request.kind,
                 title: request.title,
                 command: commandString || command,
                 output: stdout,
@@ -181,15 +222,17 @@
         try {
             process = runSvc.RunAsync(command, onComplete, null, null, null);
             debug.trace("runner", "RunAsync returned process handle", {
+                kind: request.kind,
                 title: request.title,
                 hasProcess: !!process,
                 uuid: process && process.uuid ? process.uuid : null
             });
         } catch (e) {
-            debug.exception("runner", "RunAsync threw while starting Pod::Perldoc", e);
+            debug.exception("runner", "RunAsync threw while starting local documentation lookup", e);
             finish({
                 ok: false,
                 miss: false,
+                kind: request.kind,
                 title: request.title,
                 command: command,
                 output: "",
@@ -201,6 +244,7 @@
         timeout = timers.setTimeout(function() {
             if (completed) return;
             debug.trace("runner", "lookup timeout reached", {
+                kind: request.kind,
                 title: request.title,
                 timeoutMs: TIMEOUT_MS
             });
@@ -217,10 +261,11 @@
             finish({
                 ok: false,
                 miss: false,
+                kind: request.kind,
                 title: request.title,
                 command: command,
                 output: "",
-                error: "Pod::Perldoc timed out after " + (TIMEOUT_MS / 1000) + " seconds."
+                error: "Local documentation lookup timed out after " + (TIMEOUT_MS / 1000) + " seconds."
             });
         }, TIMEOUT_MS);
     }
@@ -232,7 +277,7 @@
                 parents.push(data.parents[i].name || "");
             }
         }
-        return [perl, data.type || "", data.name || "", parents.join("::")].join("\x1f");
+        return ["v2", perl, data.type || "", data.name || "", parents.join("::")].join("\x1f");
     }
 
     this.lookup = function(data, callback) {
@@ -302,6 +347,7 @@
                     cache[key] = result;
                     debug.trace("runner", "lookup succeeded", {
                         name: data.name,
+                        kind: result.kind,
                         resolvedTitle: result.title,
                         perl: perl
                     });
@@ -312,10 +358,12 @@
                 if (result.error && result.error.trim()) errors.push(result.error.trim());
                 if (result.output && result.output.trim() && result.miss) errors.push(result.output.trim());
 
-                // A normal perldoc miss is expected for private module methods:
-                // continue to the containing module. Execution failures stop.
-                if (result.miss || result.returncode === 1) {
+                // A normal miss is expected for private methods and symbols
+                // that are not individually documented. Continue to the next
+                // section/module candidate. Execution failures still stop.
+                if (result.miss || result.returncode === 1 || result.returncode === 3) {
                     debug.trace("runner", "candidate missed; trying next", {
+                        kind: result.kind,
                         title: result.title,
                         returncode: result.returncode,
                         miss: result.miss
@@ -329,11 +377,12 @@
                     miss: false,
                     title: result.title,
                     output: result.output || "",
-                    error: result.error || "Failed to execute Pod::Perldoc.",
+                    error: result.error || "Failed to execute local documentation lookup.",
                     perl: perl
                 };
                 cache[key] = hardFailure;
                 debug.trace("runner", "hard lookup failure; stopping chain", {
+                    kind: result.kind,
                     title: result.title,
                     returncode: result.returncode,
                     error: result.error
