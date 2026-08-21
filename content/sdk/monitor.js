@@ -25,9 +25,8 @@
     var rootRedirectPending = false;
 
     // Documentation rendering is asynchronous, but a permanent poll is not
-    // necessary.  Each real UI event gets only this bounded retry burst.
+    // necessary. Each real UI event gets only this bounded retry burst.
     var RETRY_DELAYS = [0, 75, 175, 350, 700, 1400];
-    var ROOT_RETRY_DELAYS = [0, 60, 140, 300, 600];
 
     function currentBrowser() {
         var browser = $("#doc-preview", _window);
@@ -171,105 +170,76 @@
         }
     }
 
-    function perlRootResult() {
-        var result = $("#commando-results richlistitem[result-id='docs-Perl']", _window);
-        if (!result.length) result = $("#commando-results [result-id='docs-Perl']", _window);
-        return result.length ? result.element() : null;
-    }
-
-    function enterPerlSubscopeLegacy(reason) {
-        if (typeof commando.selectScope != "function" ||
-            typeof commando.setSubscope != "function") {
-            debug.trace("monitor", "cannot return to Perl root: required legacy Commando APIs unavailable", {
-                reason: reason,
-                selectScope: typeof commando.selectScope,
-                setSubscope: typeof commando.setSubscope,
-                show: typeof commando.show
-            });
-            if (typeof commando.show == "function") commando.show("scope-docs");
-            return;
-        }
-
-        var panel = $("#commando-panel", _window);
-        if (panel.length) {
-            panel.removeClass("maximized");
-            panel.removeClass("quick-search");
-        }
-
-        function selectRenderedPerlResult(attempt) {
-            var elem = perlRootResult();
-            if (elem && elem.resultData) {
-                try {
-                    commando.setSubscope(elem.resultData, true);
-                    debug.trace("monitor", "returned to Perl documentation root via legacy Commando API", {
-                        reason: reason,
-                        attempt: attempt,
-                        resultId: elem.getAttribute("result-id") || "docs-Perl"
-                    });
-                    return;
-                } catch (e) {
-                    debug.exception("monitor", "legacy setSubscope(docs-Perl) failed", e);
-                    return;
-                }
-            }
-
-            if (attempt + 1 >= ROOT_RETRY_DELAYS.length) {
-                debug.trace("monitor", "Perl root result did not render in time", {
-                    reason: reason,
-                    attempts: ROOT_RETRY_DELAYS.length
-                });
-                return;
-            }
-
-            timers.setTimeout(function() {
-                selectRenderedPerlResult(attempt + 1);
-            }, ROOT_RETRY_DELAYS[attempt + 1]);
-        }
-
-        try {
-            // selectScope() clears the old symbol subscope and performs a fresh
-            // empty search.  Its callback is fired when scope-docs completes;
-            // result painting itself may still lag slightly, hence the bounded
-            // DOM retries above.  This mirrors newer Commando.showSubscope().
-            commando.selectScope("scope-docs", function() {
-                selectRenderedPerlResult(0);
-            });
-            debug.trace("monitor", "legacy Perl root navigation dispatched", {
-                reason: reason,
-                via: "selectScope + setSubscope"
-            });
-        } catch (e) {
-            debug.exception("monitor", "legacy Perl root navigation failed", e);
-        }
-    }
-
     function showPerlRoot(reason) {
         if (rootRedirectPending) return;
         rootRedirectPending = true;
 
+        var scope = null;
+        var subscope = null;
+        try { scope = commando.getScope(); } catch (e) {}
+        try { subscope = commando.getSubscope(); } catch (e) {}
+
         debug.trace("monitor", "intercepted synthetic scope-docs Perl root index", {
             reason: reason,
             rootIndex: 0,
-            showSubscope: typeof commando.showSubscope,
-            selectScope: typeof commando.selectScope,
-            setSubscope: typeof commando.setSubscope
+            scope: scope && scope.id,
+            subscope: subscope && subscope.name,
+            clear: typeof commando.clear,
+            search: typeof commando.search
         });
 
         timers.setTimeout(function() {
             try {
-                if (typeof commando.showSubscope == "function") {
-                    commando.showSubscope("scope-docs", "docs-Perl");
-                    debug.trace("monitor", "Perl root navigation dispatched", {via: "showSubscope"});
-                } else {
-                    enterPerlSubscopeLegacy(reason);
+                if (!isPerlDocs()) {
+                    debug.trace("monitor", "Perl root redirect aborted: Perl subscope no longer active", {
+                        reason: reason
+                    });
+                    return;
                 }
-            } catch (e) {
-                debug.exception("monitor", "failed to return to Perl documentation root", e);
-            }
 
-            timers.setTimeout(function() {
-                rootRedirectPending = false;
-            }, 800);
+                var panel = $("#commando-panel", _window);
+                if (panel.length) {
+                    panel.removeClass("maximized");
+                    panel.removeClass("quick-search");
+                }
+
+                // The stock breadcrumb's index=0 is only a synthetic display
+                // root. At the moment it is clicked Commando is already in
+                // scope-docs -> Perl. Do not call selectScope(): that discards
+                // the Perl subscope and lands on the language list. Instead,
+                // preserve the current subscope and refresh its empty query.
+                if (typeof commando.clear == "function") {
+                    commando.clear();
+                } else if (typeof commando.search == "function") {
+                    commando.search("");
+                } else {
+                    debug.trace("monitor", "Perl root redirect failed: clear/search APIs unavailable", {
+                        reason: reason
+                    });
+                    return;
+                }
+
+                try {
+                    if (typeof commando.focus == "function") commando.focus();
+                } catch (ignored) {}
+
+                var afterScope = null;
+                var afterSubscope = null;
+                try { afterScope = commando.getScope(); } catch (e) {}
+                try { afterSubscope = commando.getSubscope(); } catch (e) {}
+                debug.trace("monitor", "returned to existing Perl documentation subscope", {
+                    reason: reason,
+                    via: typeof commando.clear == "function" ? "clear" : "search",
+                    scope: afterScope && afterScope.id,
+                    subscope: afterSubscope && afterSubscope.name
+                });
+            } catch (e) {
+                debug.exception("monitor", "failed to return to existing Perl documentation subscope", e);
+            } finally {
+                timers.setTimeout(function() {
+                    rootRedirectPending = false;
+                }, 250);
+            }
         }, 0);
     }
 
@@ -384,7 +354,7 @@
         var src = browserSrc(browser);
 
         // Maximized scope-docs keeps the original result selected while its own
-        // links navigate elsewhere.  Never attach perldoc to that other page.
+        // links navigate elsewhere. Never attach perldoc to that other page.
         if (selected.name && heading && selected.name != heading) {
             var mismatchKey = [selected.index, bid, did, heading].join("|");
             if (mismatchKey != lastMismatchKey) {
