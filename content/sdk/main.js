@@ -14,8 +14,9 @@
         if (loaded) return;
 
         // Komodo 9.3 needs two small Commando compatibility fixes: mouse result
-        // clicks do not refresh preview, and selectScope callbacks are not
-        // reliable enough to emulate newer showSubscope().
+        // clicks do not refresh preview, and it lacks showSubscope().  The shim
+        // preserves the already-active Perl subscope instead of reselecting the
+        // top-level Documentation scope.
         compat.start();
 
         // Normal Commando navigation bypasses scope-docs/docs.preview().
@@ -24,7 +25,7 @@
         monitor.start();
 
         loaded = true;
-        debug.trace("main", "Komodo Perldoc 0.1.8 monitor started");
+        debug.trace("main", "Komodo Perldoc 0.1.9 monitor started");
     };
 
     this.unload = function() {
