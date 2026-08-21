@@ -1,7 +1,7 @@
 (function() {
     const {Cc, Ci} = require("chrome");
 
-    const PREFIX = "[komodo-perldoc 0.1.10]";
+    const PREFIX = "[komodo-perldoc 0.2.0]";
     const consoleSvc = Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsIConsoleService);
     const dirSvc = Cc["@mozilla.org/file/directory_service;1"].getService(Ci.nsIProperties);
 
