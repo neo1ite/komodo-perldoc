@@ -2,7 +2,7 @@
     const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
     Cu.import("resource://gre/modules/Services.jsm");
 
-    const VERSION = "0.1.10";
+    const VERSION = "0.2.0";
     const PREFIX = "[komodo-perldoc " + VERSION + "]";
     const SCOPE_DOCS_CONTRACT = "@activestate.com/commando/koScopeDocs;1";
     const RETRY_DELAY_MS = 100;
