@@ -25,7 +25,7 @@
         monitor.start();
 
         loaded = true;
-        debug.trace("main", "Komodo Perldoc 0.1.10 monitor started");
+        debug.trace("main", "Komodo Perldoc 0.2.0 monitor started");
     };
 
     this.unload = function() {
