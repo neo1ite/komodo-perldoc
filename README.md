@@ -10,7 +10,7 @@ Komodo строит Perl-документацию из CodeIntel CIX. У час�
 
 ### Версия 0.2.0
 
-0.1.10 закрыла инфраструктурный этап: restart-required XUL overlay, событийный monitor, mouse preview, `Perl (1)`, `Classes`/`Properties`, локальный `Pod::Perldoc` fallback и cache.
+0.1.10 закрыла основной инфраструктурный этап: restart-required XUL overlay, событийный monitor, mouse preview, `Perl (1)`, `Classes`/`Properties`, локальный `Pod::Perldoc` fallback и cache. В 0.2.0 также перенесён hotfix 0.1.11: startup overlay использует единственную retry-chain с exponential backoff и не может запустить параллельные 100-ms polling chains при гонке classic overlay и `komodo-post-startup`.
 
 0.2.0 добавляет первый новый функциональный слой: **документацию конкретного символа внутри POD модуля**.
 
@@ -65,6 +65,7 @@ AutoSplit::autosplit
 - `Classs -> Classes`, `Propertys -> Properties`;
 - обычный локальный miss не показывает сырой stderr;
 - classic XUL overlay: установка/обновление требуют restart;
+- startup retry из 0.1.11: одна retry-chain, backoff `100 -> 200 -> 400 -> 800 -> 1000 ms`, без дублирования при `komodo-post-startup`;
 - `scope-docs.jar` и системные файлы Komodo не изменяются.
 
 ### Диагностика
@@ -73,7 +74,7 @@ AutoSplit::autosplit
 ~/.komodoide/9.3/XRE/komodo-perldoc-debug.log
 ```
 
-Для нового lookup в логе видны кандидаты `kind:"symbol"`, `module`, `owner`, `symbol`, результат экстрактора и последующий fallback.
+Для нового lookup в логе видны кандидаты `kind:"symbol"`, `module`, `owner`, `symbol`, результат экстрактора и последующий fallback. Startup backoff дополнительно пишет `delayMs` в retry-сообщениях.
 
 ### Сборка
 
@@ -87,6 +88,12 @@ AutoSplit::autosplit
 dist/komodo-perldoc-0.2.0.xpi
 ```
 
+Регрессионный тест startup retry:
+
+```sh
+node tools/test-overlay-retry.js
+```
+
 ### Smoke test 0.2.0
 
 1. Установить `dist/komodo-perldoc-0.2.0.xpi` и перезапустить Komodo по запросу Add-on Manager.
@@ -95,6 +102,7 @@ dist/komodo-perldoc-0.2.0.xpi
 4. Проверить `URI::URL::address`: если отдельной POD-секции нет, должен сработать старый fallback `Perldoc — URI::URL`.
 5. Проверить `AutoSplit::autosplit` и `_check_unique`: полный `Perldoc — AutoSplit` должен остаться рабочим fallback.
 6. Проверить `Perl (1)` и переключение результатов mouse click на предмет регрессий.
+7. В startup-логе не должно быть двух параллельных retry-chain; задержки должны расти до 1000 ms.
 
 ---
 
@@ -104,7 +112,7 @@ dist/komodo-perldoc-0.2.0.xpi
 
 ### Version 0.2.0
 
-0.2.0 adds **symbol-level POD extraction** before the existing full-module fallback.
+0.2.0 adds **symbol-level POD extraction** before the existing full-module fallback and includes the 0.1.11 startup hotfix: the classic overlay now owns a single exponential-backoff retry chain, preventing duplicate 100 ms polling chains when overlay loading races with `komodo-post-startup`.
 
 Lookup order for a CIX entry with empty `doc`:
 
@@ -120,7 +128,7 @@ The extractor uses the configured Perl's `@INC`, does not load the target module
 
 Example: `HTML::Element::address` now renders only the `address` section rather than the entire `HTML::Element` manual. If no symbol section exists (for example `AutoSplit::autosplit` in the tested Perl), the previous full-module fallback remains unchanged.
 
-All 0.1.10 navigation/compatibility fixes remain in place.
+All 0.1.10 navigation/compatibility fixes and the 0.1.11 startup-backoff fix remain in place.
 
 Diagnostics:
 
@@ -138,4 +146,10 @@ Output:
 
 ```text
 dist/komodo-perldoc-0.2.0.xpi
+```
+
+Startup retry regression test:
+
+```sh
+node tools/test-overlay-retry.js
 ```
